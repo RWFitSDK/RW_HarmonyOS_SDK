@@ -1,0 +1,11 @@
+{
+  "name": "rw_ble_sdk_demo",
+  "version": "1.0.0",
+  "description": "RW BLE SDK HarmonyOS demo",
+  "main": "",
+  "author": "rw",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "rw_ble_sdk": "file:../../libs/rw_ble_sdk_260616.har"
+  }
+}

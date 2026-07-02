@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# DevEco / HarmonyOS generated files
+.hvigor/
+.idea/
+build/
+**/build/
+**/.hvigor/
+**/.preview/
+**/.cxx/
+**/.test/
+
+# Dependencies and generated package state
+oh_modules/
+**/oh_modules/
+node_modules/
+**/node_modules/
+oh-package-lock.json5
+**/oh-package-lock.json5
+
+# Local machine and signing configuration
+local.properties
+**/local.properties
+*.p12
+*.cer
+*.p7b
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp

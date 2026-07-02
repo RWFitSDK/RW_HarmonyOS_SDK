@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "RW BLE SDK demo"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "RW BLE SDK demo"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "RW BLE Demo"
+    },
+    {
+      "name": "reason_bluetooth",
+      "value": "用于扫描和连接 RW 智能戒指"
+    }
+  ]
+}
