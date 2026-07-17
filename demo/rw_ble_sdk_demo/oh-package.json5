@@ -6,6 +6,6 @@
   "author": "rw",
   "license": "UNLICENSED",
   "dependencies": {
-    "rw_ble_sdk": "file:../../libs/rw_ble_sdk_260616.har"
+    "rw_ble_sdk": "file:../../libs/rw_ble_sdk.har"
   }
 }

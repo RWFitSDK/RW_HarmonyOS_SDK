@@ -19,7 +19,7 @@
 
 #### 1.3 注意事项
 
-1. 使用此SDK时最好结合示例工程 `rw_ble_sdk_demo` 使用; 参考例子只需关注 ScanPage 与 MainPage 两个页面代码即可.
+1. 使用此SDK时建议结合示例工程 `rw_ble_sdk_demo`，具体用法可参考示例工程。
 
 2. `RwBleSdk` 指令操作分两种模式:
    - **一问一答型**（GET/SET类）: 直接使用 `await` 获取结果，无需手动订阅和取消;
@@ -35,12 +35,14 @@
 
 **第2步: 添加依赖库**
 
-1. 在项目 `oh-package.json5` 中添加 HAR 依赖
+1. 将 `rw_ble_sdk.har` 复制到应用模块的 `libs` 目录。
+
+2. 在应用模块的 `oh-package.json5` 中添加 HAR 依赖:
 
 ```json
 {
   "dependencies": {
-    "rw_ble_sdk": "file:../rw_ble_sdk"
+    "rw_ble_sdk": "file:./libs/rw_ble_sdk.har"
   }
 }
 ```
@@ -56,24 +58,42 @@
   {
     "name": "ohos.permission.ACCESS_BLUETOOTH",
     "reason": "$string:reason_bluetooth",
-    "usedScene": {}
+    "usedScene": {
+      "abilities": ["EntryAbility"],
+      "when": "always"
+    }
   }
 ]
 ```
 
-> HarmonyOS 统一为 `ACCESS_BLUETOOTH` 单一权限，无需像 Android 分别申请 SCAN/CONNECT/LOCATION.
+`ACCESS_BLUETOOTH` 是 `user_grant` 权限，除了声明权限，还需要在运行时请求用户授权:
+
+```typescript
+import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit'
+
+const context = this.getUIContext().getHostContext() as common.Context
+const permissions: Array<Permissions> = ['ohos.permission.ACCESS_BLUETOOTH']
+const atManager = abilityAccessCtrl.createAtManager()
+await atManager.requestPermissionsFromUser(context, permissions)
+```
+
+> HarmonyOS 需要申请 `ACCESS_BLUETOOTH` 权限。
 
 **第4步: 初始化SDK**
 
 ```typescript
+import { common } from '@kit.AbilityKit'
 import { RwBleSdk } from 'rw_ble_sdk'
 
-RwBleSdk.initSDK(getContext(this))
+const context = this.getUIContext().getHostContext() as common.Context
+RwBleSdk.initSDK(context)
 ```
+
+SDK 应在扫描或连接前初始化，应用进程内初始化一次即可。
 
 > [!CAUTION]
 >
-> 会默认保存蓝牙部分日志文件, 保存在应用沙箱 `files/logger/devices/` 文件夹下. 可 `RwBleSdk.setLogEnable(false)` 关闭.
+> 会默认保存蓝牙部分日志文件, 保存在应用沙箱 `files/logger/devices/` 文件夹下. 可 `RwBleSdk.setLogEnable(false)` 关闭. 导出或分享日志前建议调用 `RwBleSdk.flushLog()`.
 
 
 
@@ -105,6 +125,18 @@ RwBleSdk.startScan({
 // 停止搜索
 RwBleSdk.stopScan()
 ```
+
+SDK 默认只返回支持的 RW 设备，扫描会在 15 秒后自动停止。
+
+`RwBleDevice` 中与连接相关的主要字段:
+
+| 字段 | 说明 |
+| --- | --- |
+| `deviceId` | HarmonyOS 当前扫描得到的设备标识，连接时必须使用；设备重启或 OTA 后可能变化 |
+| `mac` | 设备真实 MAC，建议用于持久化识别设备 |
+| `name` | 设备广播名称 |
+| `rssi` | 当前扫描信号强度 |
+| `data` | 原始广播数据 |
 
 ##### 3.1.2 停止搜索
 
@@ -159,10 +191,6 @@ RwBleSdk.connectDeviceWithModel(bleDevice)
 >
 > 连接后, 业务操作应该在 `onRingDidFunctionMenu` 之后才进行操作.
 >
-> `RwBleSdk.notifyConnected()` 与 `RwBleSdk.notifyDisconnected(reason)` 是 SDK 内部连接层桥接方法，业务侧通常不需要主动调用；文档保留说明以便后续和 Android 连接章节对齐。
-
-
-
 ##### 3.1.4 断开连接设备
 
 > 接口说明: 断开正在连接的设备
@@ -177,9 +205,44 @@ RwBleSdk.disconnect()
 
 > [!IMPORTANT]
 >
-> HarmonyOS本地绑定,自动重连需自行实现, 本SDK不提供此功能;可以连接成功后,保存设备信息与配置表,方便页面显示与重连.
+> HarmonyOS本地绑定,自动重连需自行实现, 本SDK不提供此功能;可以连接成功后,保存设备真实 `mac` 与配置表,方便页面显示与重连.
 
-已保存设备信息后，可调用 `RwBleSdk.reconnectDevice(device: RwBleDevice): void` 发起重连。
+HarmonyOS 扫描上报的 `deviceId` 可能是系统分配的当前设备标识，并不一定是设备真实 MAC。设备重启或 OTA 后，不建议直接使用持久化的旧 `deviceId`。推荐的重连流程为:
+
+1. 扫描附近设备；
+2. 用已保存的真实 `mac` 匹配扫描结果；
+3. 找到后立即调用 `RwBleSdk.stopScan()`；
+4. 保存最新扫描结果，再使用最新 `deviceId` 连接。
+
+```typescript
+let matched = false
+
+RwBleSdk.startScan({
+  onScanDevice(device: RwBleDevice) {
+    if (matched || normalize(device.mac) !== normalize(savedDevice.mac)) return
+    matched = true
+
+    // 连接前先停止扫描
+    RwBleSdk.stopScan()
+
+    // 业务层应在此保存 device，用最新 deviceId 覆盖旧记录
+    saveDevice(device)
+    RwBleSdk.reconnectDevice(device)
+  },
+  onScanFinish() {
+    if (!matched) console.info('未发现已绑定设备')
+  },
+  onError(code: number, error: Error) {
+    console.error(`重连扫描失败: ${code} ${JSON.stringify(error)}`)
+  }
+})
+
+function normalize(value?: string): string {
+  return (value ?? '').replace(/[:-]/g, '').toUpperCase()
+}
+```
+
+`RwBleSdk.reconnectDevice(device: RwBleDevice): void` 仅使用传入的设备信息发起连接，不会自动扫描。
 
 
 
@@ -197,10 +260,15 @@ SupportMenuBean 属性定义:
 
 | SupportMenuBean属性         | 说明                     |
 | --------------------------- | ------------------------ |
+| name/mac/uuid               | 当前设备名称、真实MAC与连接标识 |
 | isPushMsgEnableSwitch       | 是否启用消息控制开关     |
 | isAlarm                     | 是否支持闹钟             |
 | isBrightScreenSleepTime     | 是否支持屏幕睡眠时间设置 |
 | isBrightScreenTime          | 是否支持亮屏时长         |
+| isRaiseBrightScreen         | 是否支持抬腕亮屏         |
+| isLEDLight                  | 是否支持LED亮度设置      |
+| isWearDir                   | 是否支持佩戴方向设置     |
+| isTakePhoto                 | 是否支持拍照控制         |
 | isNewSport                  | 是否支持多运动           |
 | isRememberSwitch            | 是否支持Muslim赞念开关   |
 | isSupportHrReminder         | 是否支持HR报警提示功能   |
@@ -209,6 +277,7 @@ SupportMenuBean 属性定义:
 | isSupportAlarmVibrationDuration | 是否支持闹钟震动时长设置 |
 | isSupportVibrationInterval  | 是否支持震动间隔时长设置 |
 | isStep                      | 是否支持计步             |
+| isActivityDataStaticTran2   | 是否支持实时活动数据上报 |
 | isHr                        | 是否支持心率             |
 | isBloodPress                | 是否支持血压             |
 | isSleep                     | 是否支持睡眠             |
@@ -262,7 +331,7 @@ console.log(RwBleSdk.getSDKVersion())
 
 | 参数   | 类型       | 说明 | 值                                                           |
 | ------ | ---------- | ---- | ------------------------------------------------------------ |
-| person | PersonBean | 类   | gender: 性别（0.女 1.男)<br>height: 身高cm,浮点型<br>weight: 体重kg,浮点型<br/>age: 年龄 |
+| person | PersonBean | 类   | gender: 性别（0.女 1.男)<br>height: 身高cm,浮点型<br>weight: 体重kg,浮点型<br>age: 年龄<br>measureUnit: 单位制（0.公制 1.英制） |
 
 调用示例:
 
@@ -279,7 +348,7 @@ try {
   await RwBleSdk.setUserInfo(person)
   console.log('用户信息设置成功')
 } catch (e) {
-  console.error('用户信息设置失败', e.message)
+  console.error('用户信息设置失败', JSON.stringify(e))
 }
 ```
 
@@ -300,15 +369,15 @@ try {
 ```typescript
 try {
   const info = await RwBleSdk.getFirmwareVersion()
-  console.log(`设备型号: ${info.deviceClazz}`)
+  console.log(`设备型号: ${info.deviceClazz ?? '-'}`)
   console.log(`固件版本: ${info.deviceNo}`)
-  console.log(`UI版本: ${info.uiVersion}`)
-  console.log(`屏幕: ${info.screenWidth}x${info.screenHeight}`)
+  console.log(`UI版本: ${info.uiVersion ?? '-'}`)
+  console.log(`屏幕: ${info.screenWidth ?? '-'}x${info.screenHeight ?? '-'}`)
 
   const mac = await RwBleSdk.getMacAddress()
   console.log(`设备MAC: ${mac}`)
 } catch (e) {
-  console.error('获取设备信息失败', e.message)
+  console.error('获取设备信息失败', JSON.stringify(e))
 }
 ```
 
@@ -316,12 +385,12 @@ FirmVersionBean:
 
 ```typescript
 interface FirmVersionBean {
-  deviceClazz: string   // 设备型号
   deviceNo: string      // 设备版本号
-  screenType: number    // 0方 1圆
-  screenWidth: number   // 设备宽
-  screenHeight: number  // 设备高
-  uiVersion: string     // UI版本号
+  deviceClazz?: string  // 设备型号
+  screenType?: number   // 0方 1圆
+  screenWidth?: number  // 设备宽
+  screenHeight?: number // 设备高
+  uiVersion?: string    // UI版本号
 }
 ```
 
@@ -343,7 +412,7 @@ try {
   console.log(`电量: ${power.power}%`)
   console.log(`电压: ${power.voltage}`)
 } catch (e) {
-  console.error('获取电量失败', e.message)
+  console.error('获取电量失败', JSON.stringify(e))
 }
 ```
 
@@ -366,7 +435,7 @@ interface PowerBean {
 
 `RwBleSdk.setVideoHid(bean: VideoHidBean): Promise<void>`
 
-`RwBleSdk.getVideoHid(): Promise<Object>`
+`RwBleSdk.getVideoHid(): Promise<VideoHidBean>`
 
 参数说明:
 
@@ -393,7 +462,7 @@ console.log(`视频控制: ${hid.hidOpen}`)
 
 `RwBleSdk.setRingLedLevel(bean: BrightScreenLedBean): Promise<void>`
 
-`RwBleSdk.getRingLedLevel(): Promise<Object>`
+`RwBleSdk.getRingLedLevel(): Promise<BrightScreenLedBean>`
 
 参数说明:
 
@@ -422,7 +491,7 @@ await RwBleSdk.setRingLedLevel({ isOpen: true, lcdLevel: 3 })
 
 `RwBleSdk.setRingWearHand(isRight: boolean): Promise<void>`
 
-`RwBleSdk.getRingWearDir(): Promise<Object>`
+`RwBleSdk.getRingWearDir(): Promise<number>`
 
 调用示例:
 
@@ -447,15 +516,15 @@ await RwBleSdk.setRingWearHand(false) // false左手, true右手
 
 `RwBleSdk.controlTakePhoto(status: number): Promise<void>`
 
-`RwBleSdk.onTakePhotoEvent(cb: (value: Object) => void): () => void`
+`RwBleSdk.onTakePhotoEvent(cb: (value: number) => void): () => void`
 
 调用示例:
 
 ```typescript
 // 订阅设备拍照事件
 const unsub = RwBleSdk.onTakePhotoEvent((value) => {
-  // value 为设备主动上报的拍照事件数据
-  console.log(`拍照事件: ${JSON.stringify(value)}`)
+  // value 为设备主动上报的拍照事件值
+  console.log(`拍照事件: ${value}`)
 })
 
 // 启动拍照模式
@@ -512,7 +581,7 @@ await RwBleSdk.setPowerOff(Constants.CONTROL_DEVICE_RECOVERY)
 
 方法说明:
 
-`RwBleSdk.getAlarmRemind(): Promise<Object>`
+`RwBleSdk.getAlarmRemind(): Promise<AlarmRemainderBean[]>`
 
 调用示例:
 
@@ -532,6 +601,8 @@ console.log(`闹钟: ${JSON.stringify(alarms)}`)
 `RwBleSdk.setAlarmRemind(alarms: AlarmRemainderBean[]): Promise<void>`
 
 `RwBleSdk.setAlarm(alarms: AlarmRemainderBean[]): Promise<void>`
+
+`setAlarm()` 与 `setAlarmRemind()` 功能相同，任选其一使用。
 
 参数说明:
 
@@ -562,7 +633,6 @@ const alarms: AlarmRemainderBean[] = [
 ]
 
 await RwBleSdk.setAlarmRemind(alarms)
-// setAlarm 与 setAlarmRemind 等价，保留给后续与 Android 章节命名对齐使用
 ```
 
 
@@ -585,7 +655,7 @@ await RwBleSdk.deleteAllAlarmRemind()
 
 `RwBleSdk.setVibrationCount(level: number, count: number): Promise<void>`
 
-`RwBleSdk.getVibrationCount(): Promise<Object>`
+`RwBleSdk.getVibrationCount(): Promise<VibrationCountBean>`
 
 参数说明:
 
@@ -615,12 +685,13 @@ console.log(`震动次数: ${vibration.count}`)
 
 `RwBleSdk.setRingBrightScreenSleepTime(bean: BrightScreenTimeBean): Promise<void>`
 
-`RwBleSdk.getRingBrightScreenSleepTime(): Promise<Object>`
+`RwBleSdk.getRingBrightScreenSleepTime(): Promise<BrightScreenTimeBean>`
 
 参数说明:
 
 | BrightScreenTimeBean参数 | 类型    | 说明                     |
 | ------------------------ | ------- | ------------------------ |
+| timeSecond               | number  | 亮屏时长（秒） |
 | isOpen                   | boolean | 开关打开或关闭           |
 | startHour                | number  | 开始时间小时             |
 | startMin                 | number  | 开始时间分钟             |
@@ -632,6 +703,7 @@ console.log(`震动次数: ${vibration.count}`)
 ```typescript
 // 设置
 await RwBleSdk.setRingBrightScreenSleepTime({
+  timeSecond: 10,
   isOpen: true,
   startHour: 20,  // 晚上8点至早上8点睡眠
   startMin: 0,
@@ -653,6 +725,8 @@ console.log(`睡眠模式: ${sleepTime.isOpen} ${sleepTime.startHour}:${sleepTim
 方法说明: 
 
 `RwBleSdk.setPushMsg(msg: MsgPushBean): void`
+
+`appId` 和标题最多分别发送32字节，正文最多发送250字节；超出部分由SDK按UTF-8字节截断。
 
 调用示例:
 
@@ -694,7 +768,7 @@ RwBleSdk.controlPhone(1)
 
 方法说明:
 
-`RwBleSdk.onMusicControl(cb: (value: Object) => void): () => void`
+`RwBleSdk.onMusicControl(cb: (value: number) => void): () => void`
 
 返回值说明:
 
@@ -726,7 +800,7 @@ unsub()
 
 `RwBleSdk.setMuslimCountSwitch(status: number): Promise<void>`
 
-`RwBleSdk.getMuslimCountSwitch(): Promise<Object>`
+`RwBleSdk.getMuslimCountSwitch(): Promise<number>`
 
 参数说明:
 
@@ -753,15 +827,15 @@ console.log(`赞念开关: ${status === 1 ? '开' : '关'}`)
 
 方法说明: 
 
-`RwBleSdk.getHrAlert(): Promise<Object>`
+`RwBleSdk.getHrAlert(): Promise<HrAlertBean>`
 
 `RwBleSdk.setHrAlert(status: number, value: number, underValue: number): Promise<void>`
 
-`RwBleSdk.getBoAlert(): Promise<Object>`
+`RwBleSdk.getBoAlert(): Promise<BoAlertBean>`
 
 `RwBleSdk.setBoAlert(status: number, value: number): Promise<void>`
 
-`RwBleSdk.onHrBoAlertEvent(cb: (value: Object) => void): () => void`
+`RwBleSdk.onHrBoAlertEvent(cb: (value: HrBoActualReminderBean) => void): () => void`
 
 参数说明:
 
@@ -804,7 +878,7 @@ const unsub = RwBleSdk.onHrBoAlertEvent((value) => {
 
 方法说明: 
 
-`RwBleSdk.getBrightScreenTime(): Promise<Object>`
+`RwBleSdk.getBrightScreenTime(): Promise<BrightScreenTimeBean>`
 
 `RwBleSdk.setBrightScreenTime(time: number): Promise<void>`
 
@@ -827,13 +901,13 @@ console.log(`亮屏时长: ${(bright as BrightScreenTimeBean).timeSecond}s`)
 
 
 
-##### 3.2.1.18 获取与设置抬腕亮屏
+##### 3.2.1.18 获取与设置抬腕亮屏时长
 
 >  配置表属性: `isRaiseBrightScreen`
 
 方法说明: 
 
-`RwBleSdk.getRaiseBrightScreen(): Promise<Object>`
+`RwBleSdk.getRaiseBrightScreen(): Promise<BrightScreenBean>`
 
 `RwBleSdk.setRaiseBrightScreen(bean: BrightScreenBean): Promise<void>`
 
@@ -874,8 +948,6 @@ console.log(`抬腕亮屏: ${raise.isOpen}`)
 
 `RwBleSdk.setTimeFormat(type: number): Promise<void>`
 
-设备时间同步可调用 `RwBleSdk.setDate(): Promise<void>`，payload 由 SDK 按当前系统时间生成。
-
 参数说明:
 
 | 参数 | 类型   | 说明                       |
@@ -898,7 +970,7 @@ await RwBleSdk.setTimeFormat(0) // 24小时制
 
 `RwBleSdk.setAlarmVibrationDuration(count: number): Promise<void>`
 
-`RwBleSdk.getAlarmVibrationDuration(): Promise<Object>`
+`RwBleSdk.getAlarmVibrationDuration(): Promise<number>`
 
 参数说明:
 
@@ -925,7 +997,7 @@ console.log(`闹钟震动次数: ${count}`)
 
 方法说明:
 
-`RwBleSdk.onTouchEvent(cb: (value: Object) => void): () => void`
+`RwBleSdk.onTouchEvent(cb: (value: TouchEventBean) => void): () => void`
 
 返回值说明:
 
@@ -955,7 +1027,7 @@ unsub()
 
 `RwBleSdk.setVibrationInterval(intervalMs: number): Promise<void>`
 
-`RwBleSdk.getVibrationInterval(): Promise<Object>`
+`RwBleSdk.getVibrationInterval(): Promise<number>`
 
 参数说明:
 
@@ -984,12 +1056,20 @@ console.log(`震动间隔: ${interval}ms`)
 
 `RwBleSdk.startFactoryTest(testMode: number): Promise<number>`
 
+`RwBleSdk.onFactoryTest(cb: (value: FactoryTestResult) => void): () => void`
+
 调用示例:
 
 ```typescript
-// 返回值为校正结果
+// 如需观察“校正中(result=0)”和最终结果，先订阅状态
+const unsub = RwBleSdk.onFactoryTest((status) => {
+  console.log(`校正状态: mode=${status.testMode} result=${status.result}`)
+})
+
+// Promise会忽略中间的result=0，在非0最终结果到达后完成
 const result = await RwBleSdk.startFactoryTest(0x15)
 console.log(`心率校正结果: ${result}`)
+unsub()
 ```
 
 
@@ -1004,7 +1084,7 @@ console.log(`心率校正结果: ${result}`)
 
 `RwBleSdk.setFallDetect(enable: number): Promise<void>`
 
-`RwBleSdk.getFallDetect(): Promise<Object>`
+`RwBleSdk.getFallDetect(): Promise<number>`
 
 参数说明:
 
@@ -1033,7 +1113,7 @@ console.log(`跌落提醒: ${JSON.stringify(res)}`)
 
 `RwBleSdk.setCountReminderInterval(minutes: number): Promise<void>`
 
-`RwBleSdk.getCountReminderInterval(): Promise<Object>`
+`RwBleSdk.getCountReminderInterval(): Promise<number>`
 
 参数说明:
 
@@ -1059,7 +1139,7 @@ await RwBleSdk.setCountReminderInterval(0)
 
 #### 3.2.2 健康数据同步(实时单次与全天检测)
 
-> 健康数据检测有两种方式: 实时单次检测与全天检测。健康数据包括心率,血氧,压力,HRV,睡眠等, **睡眠无实时检测**。 
+> 健康数据检测有两种方式: 实时单次检测与全天检测。健康数据包括心率,血氧,压力,HRV,睡眠等, **睡眠不支持由 APP 主动启动单次检测**。部分设备可在睡眠过程中自动推送传感器原始睡眠数据。
 >
 > (1) 实时单次检测: APP侧启动设备进入单次检测,检测完后马上返回结果。
 >
@@ -1081,7 +1161,7 @@ await RwBleSdk.setCountReminderInterval(0)
 
 `RwBleSdk.onHealthRealtimeData(cb: (data: HealthDataSyncBean) => void): () => void`
 
-`RwBleSdk.onHealthControlEvent(cb: (value: Object) => void): () => void`
+`RwBleSdk.onHealthControlEvent(cb: (value: HealthControlEventBean) => void): () => void`
 
 参数说明:
 
@@ -1141,24 +1221,33 @@ HealthDataSyncBean 说明:
 | 字段            | 类型   | 说明                                           |
 | --------------- | ------ | ---------------------------------------------- |
 | dataType        | number | 健康数据类型，对应 `HealthType`                |
-| value           | number | 通用值，部分数据类型会同时填充具体字段         |
-| value2          | number | 通用第二值，如血压舒张压等                     |
-| timestamp       | number | 数据时间戳，秒(s)                              |
-| date            | string | 日期，yyyy-MM-dd                               |
-| hour            | string | 小时，HH                                       |
-| hrValue         | number | 心率值                                         |
-| boValue         | number | 血氧值                                         |
-| hrvValue        | number | HRV值                                          |
-| pressureValue   | number | 压力值                                         |
-| bloodSugarValue | number | 血糖值                                         |
-| bpSp            | number | 收缩压                                         |
-| bpDp            | number | 舒张压                                         |
-| tempValue       | number | 体温原始值                                     |
-| temperature     | number | 体温实际值                                     |
-| steps           | number | 实时活动步数                                   |
-| calorie         | number | 实时活动卡路里                                 |
-| distance        | number | 实时活动距离                                   |
-| muslimCount     | number | 赞念实时计数                                   |
+| value           | number（可选） | 通用值，部分数据类型会同时填充具体字段         |
+| value2          | number（可选） | 通用第二值，如血压舒张压等                     |
+| timestamp       | number（可选） | 数据时间戳，秒(s)                              |
+| date            | string（可选） | 日期，yyyy-MM-dd                               |
+| hour            | string（可选） | 小时，HH                                       |
+| hrValue         | number（可选） | 心率值                                         |
+| boValue         | number（可选） | 血氧值                                         |
+| hrvValue        | number（可选） | HRV值                                          |
+| pressureValue   | number（可选） | 压力值                                         |
+| bloodSugarValue | number（可选） | 血糖值                                         |
+| bpSp            | number（可选） | 收缩压                                         |
+| bpDp            | number（可选） | 舒张压                                         |
+| tempValue       | number（可选） | 体温原始值                                     |
+| temperature     | number（可选） | 体温实际值                                     |
+| steps           | number（可选） | 实时活动步数                                   |
+| calorie         | number（可选） | 实时活动卡路里                                 |
+| distance        | number（可选） | 实时活动距离                                   |
+| muslimCount     | number（可选） | 赞念实时计数                                   |
+| hrPartData      | HrPartData[]（可选） | 本次通知中的全部心率/HRV记录             |
+| boPartData      | BoPartData[]（可选） | 本次通知中的全部血氧记录                  |
+| bpPartData      | BpPartData[]（可选） | 本次通知中的全部血压记录                  |
+| tempPartData    | TempPartData[]（可选） | 本次通知中的全部体温/血糖记录            |
+| pressurePartData | PressurePartData[]（可选） | 本次通知中的全部压力记录             |
+| stepJLPartData  | HistoryStepSyncBean[]（可选） | 本次通知中的全部实时活动记录       |
+| muslimCountPartData | MuslimCountItemBean（可选） | 本次通知中的赞念记录 |
+
+单值字段（如 `hrValue`、`timestamp`）保存本次通知最后一条记录；批量记录请优先读取对应的 `*PartData` 数组。
 
 
 
@@ -1174,13 +1263,13 @@ HealthDataSyncBean 说明:
 
 `RwBleSdk.setTimedHeartRate(bean: DrinkReminderBean): Promise<void>`
 
-`RwBleSdk.getTimedHeartRate(): Promise<Object>`
+`RwBleSdk.getTimedHeartRate(): Promise<DrinkReminderBean>`
 
 参数说明:
 
 | 参数         | 类型              | 说明 | 值                                                           |
 | ------------ | ----------------- | ---- | ------------------------------------------------------------ |
-| reminderBean | DrinkReminderBean | 类   | isOpen: true开/false关<br>remindDuration: 间隔时间30或60分钟<br>startHour: 0 固定<br>startMin: 0 固定<br>endHour: 23 固定<br>endMin: 59 固定 |
+| reminderBean | DrinkReminderBean | 类   | isOpen: true开/false关<br>remindDuration: 间隔时间30或60分钟<br>startHour: 固定为0<br>startMin: 固定为0<br>endHour: 固定为23<br>endMin: 固定为59 |
 
 调用示例:
 
@@ -1203,7 +1292,7 @@ console.log(`心率监听: ${hr.isOpen} 间隔${hr.remindDuration}分钟`)
 
 `RwBleSdk.setTimedBloodOxygen(bean: DrinkReminderBean): Promise<void>`
 
-`RwBleSdk.getTimedBloodOxygen(): Promise<Object>`
+`RwBleSdk.getTimedBloodOxygen(): Promise<DrinkReminderBean>`
 
 ###### 3.2.2.2.3 心率变异性(HRV)检测设置与获取
 
@@ -1211,7 +1300,7 @@ console.log(`心率监听: ${hr.isOpen} 间隔${hr.remindDuration}分钟`)
 
 `RwBleSdk.setTimedHRV(bean: DrinkReminderBean): Promise<void>`
 
-`RwBleSdk.getTimedHRV(): Promise<Object>`
+`RwBleSdk.getTimedHRV(): Promise<DrinkReminderBean>`
 
 ###### 3.2.2.2.4 压力检测设置与获取
 
@@ -1219,7 +1308,7 @@ console.log(`心率监听: ${hr.isOpen} 间隔${hr.remindDuration}分钟`)
 
 `RwBleSdk.setTimedStress(bean: DrinkReminderBean): Promise<void>`
 
-`RwBleSdk.getTimedStress(): Promise<Object>`
+`RwBleSdk.getTimedStress(): Promise<DrinkReminderBean>`
 
 ###### 3.2.2.2.5 血糖检测设置与获取
 
@@ -1227,7 +1316,7 @@ console.log(`心率监听: ${hr.isOpen} 间隔${hr.remindDuration}分钟`)
 
 `RwBleSdk.setTimedBloodSugar(bean: DrinkReminderBean): Promise<void>`
 
-`RwBleSdk.getTimedBloodSugar(): Promise<Object>`
+`RwBleSdk.getTimedBloodSugar(): Promise<DrinkReminderBean>`
 
 ###### 3.2.2.2.6 血压检测设置与获取
 
@@ -1235,7 +1324,7 @@ console.log(`心率监听: ${hr.isOpen} 间隔${hr.remindDuration}分钟`)
 
 `RwBleSdk.setTimedBloodPressure(bean: DrinkReminderBean): Promise<void>`
 
-`RwBleSdk.getTimedBloodPressure(): Promise<Object>`
+`RwBleSdk.getTimedBloodPressure(): Promise<DrinkReminderBean>`
 
 ###### 3.2.2.2.7 体温检测设置与获取
 
@@ -1243,7 +1332,7 @@ console.log(`心率监听: ${hr.isOpen} 间隔${hr.remindDuration}分钟`)
 
 `RwBleSdk.setTimedBodyTemperature(bean: DrinkReminderBean): Promise<void>`
 
-`RwBleSdk.getTimedBodyTemperature(): Promise<Object>`
+`RwBleSdk.getTimedBodyTemperature(): Promise<DrinkReminderBean>`
 
 > 以上 3.2.2.2.2 ~ 3.2.2.2.7 用法与心率一致，仅方法名不同.
 
@@ -1262,7 +1351,7 @@ console.log(`心率监听: ${hr.isOpen} 间隔${hr.remindDuration}分钟`)
 调用示例:
 
 ```typescript
-RwBleSdk.syncAllHealthData({
+const syncCallback: HealthSyncCallback = {
   onSyncProgress(progress: number) {
     console.log(`同步进度: ${progress}%`)
   },
@@ -1276,7 +1365,7 @@ RwBleSdk.syncAllHealthData({
     data.forEach(d => console.log(`步数: ${d.totalSteps} 日期:${d.date}`))
   },
   onSyncSleep(data: SleepSyncBean[]) {
-    data.forEach(d => console.log(`睡眠片段: ${d.timestamp} 模式:${d.sleepModel}`))
+    data.forEach(d => console.log(`睡眠: ${d.totalSleepTime}分钟 片段:${d.itemCount}`))
   },
   onSyncHr(data: HeartRateSyncBean[]) {
     console.log(`心率数据: ${data.length}天`)
@@ -1288,7 +1377,12 @@ RwBleSdk.syncAllHealthData({
   onSyncBloodSugar(data: BloodSugarSyncBean[]) {},
   onSyncHrv(data: HrvSyncBean[]) {},
   onSyncMuslimCount(data: MuslimCountSyncBean[]) {}
-})
+}
+
+RwBleSdk.syncAllHealthData(syncCallback)
+
+// 页面退出或不再需要回调时再调用:
+// RwBleSdk.removeHealthDataCallback(syncCallback)
 ```
 
 ###### 3.2.2.3.1 获取单个健康数据
@@ -1304,7 +1398,12 @@ import { RingHealthType } from 'rw_ble_sdk'
 
 // 获取今天步数
 RwBleSdk.syncHealthDataByType(RingHealthType.TODAY_STEP, syncCallback)
+
+// 获取历史步数
+RwBleSdk.syncHealthDataByType(RingHealthType.STEP, syncCallback)
 ```
+
+同步错误码: `-1`已有同步进行中，`-2`尚未取得功能表，`-3`类型不受支持，`-4`命令超时/写失败，`-5`同步期间连接断开。
 
 
 
@@ -1324,10 +1423,10 @@ RwBleSdk.syncHealthDataByType(RingHealthType.TODAY_STEP, syncCallback)
      totalCalorie: number    // 总卡路里cal
      totalDistance: number   // 总里程m
      itemCount: number       // 数据量
-     items: StepItemBean[]   // 每小时的计步数据
+     items: StepHourItem[]   // 每小时的计步数据
    }
 
-   interface StepItemBean {
+   interface StepHourItem {
      index: number    // 小时序号(0-23)
      steps: number    // 步数
      calorie: number  // 卡路里
@@ -1339,9 +1438,19 @@ RwBleSdk.syncHealthDataByType(RingHealthType.TODAY_STEP, syncCallback)
 
    ```typescript
    interface SleepSyncBean {
-     timestamp: number   // 睡眠片段时间戳 秒(s)
-     sleepModel: number  // 睡眠模式
-     isTemporary: number // 是否临时睡眠数据
+     timestamp: number      // 本次睡眠结束时间戳 秒(s)
+     time: number           // 与timestamp一致
+     totalSleepTime: number // 总时长 分钟
+     asleepTime: number     // 入睡时间戳 秒(s)
+     awakeTime: number      // 醒来时间戳 秒(s)
+     itemCount: number
+     items: SleepItemBean[]
+   }
+
+   interface SleepItemBean {
+     len: number          // 当前阶段时长 分钟
+     sleepType: number    // 0清醒、1浅睡、2深睡、3快速眼动
+     isTemporary?: number
    }
    ```
 
@@ -1409,9 +1518,9 @@ RwBleSdk.syncHealthDataByType(RingHealthType.TODAY_STEP, syncCallback)
 
 > [!NOTE]
 >
-> OTA升级文件需从厂家生成取得，确定无误后再进行测试. 防止升级出错变砖.
+> 请仅使用 RW 提供且与设备型号匹配的 OTA 固件，升级过程中请保持设备连接。
 >
-> 当前 HarmonyOS 版本保留 OTA 章节和 API 入口，`ringOtaWithFileData` 暂未实现文件升级流程，会通过 `onError(-3)` 返回不支持。后续实现后本章节保持与 Android OTA 章节对齐补充。
+> SDK会自动识别 PXI 或 Telink OTA 平台，调用方无需选择平台。PXI 与 Telink 固件不可交叉使用，升级过程中请避免同时下发其他业务指令。
 
 方法说明:
 
@@ -1422,7 +1531,7 @@ RwBleSdk.syncHealthDataByType(RingHealthType.TODAY_STEP, syncCallback)
 ```typescript
 RwBleSdk.ringOtaWithFileData(otaFilePath, {
   onProgress(pro: number) {
-    console.log(`OTA进度: ${pro}%`)
+    console.log(`OTA进度: ${Math.floor(pro * 100)}%`)
   },
   onSuccess() {
     console.log('OTA升级完成')
@@ -1432,6 +1541,26 @@ RwBleSdk.ringOtaWithFileData(otaFilePath, {
   }
 })
 ```
+
+`onProgress` 取值范围为 `0.0~1.0`。
+
+错误码说明:
+
+| 平台 | 错误码 | 含义 |
+| --- | ---: | --- |
+| 通用 | -3 | 当前连接未发现 PXI 或 Telink OTA 服务 |
+| Telink | 1 | Telink升级过程中设备断开 |
+| Telink | 2 | 固件文件读取失败 |
+| Telink | 3 | OTA升级超时 |
+| Telink | 4 | 设备返回升级失败 |
+| Telink | 5 | OTA数据写入失败 |
+| PXI | 11 | 固件文件读取失败 |
+| PXI | 12 | 设备未连接或升级中断开 |
+| PXI | 13 | CRC校验失败 |
+| PXI | 14 | OTA步骤超时 |
+| PXI | 15 | OTA数据写入失败或参数异常 |
+
+> 请在设备连接成功并获取功能配置表后再启动 OTA。
 
 
 
@@ -1451,14 +1580,14 @@ RwBleSdk.ringOtaWithFileData(otaFilePath, {
 
 方法说明: 
 
-`RwBleSdk.getSportStatus(): Promise<Object>`
+`RwBleSdk.getSportStatus(): Promise<NewSportBean>`
 
 NewSportBean 说明:
 
 | 参数       | 类型              | 说明     |
 | ---------- | ----------------- | -------- |
-| sportType  | BleActivityMode   | 运动类型 |
-| status     | WorkoutControlType | 运动状态 |
+| sportType  | number | 运动类型，使用 `BLE_ACTIVITY_*` 常量 |
+| status     | number | 运动状态，使用 `WORKOUT_*` 常量 |
 
 WorkoutControlType:
 
@@ -1486,11 +1615,11 @@ if (sport.status === WORKOUT_BEGIN || sport.status === WORKOUT_CONTINUE) {
 
 方法说明: 
 
-`RwBleSdk.controlSport(sportType: BleActivityMode, status: WorkoutControlType): Promise<void>`
+`RwBleSdk.controlSport(sportType: number, status: number): Promise<void>`
 
-`RwBleSdk.onSportDataPush(cb: (value: Object) => void): () => void`
+`RwBleSdk.onSportDataPush(cb: (value: SportDataPushBean) => void): () => void`
 
-`RwBleSdk.onSportControl(cb: (value: Object) => void): () => void`
+`RwBleSdk.onSportControl(cb: (value: NewSportBean) => void): () => void`
 
 SportDataPushBean 说明:
 
@@ -1550,26 +1679,37 @@ await RwBleSdk.setExerciseNotify(false)
 
 方法说明: 
 
-`RwBleSdk.getSportResult(): Promise<Object>`
+`RwBleSdk.getSportResult(): Promise<SportResultBean[]>`
 
 SportResultBean 参数说明:
 
 | 参数          | 类型              | 说明                           |
 | ------------- | ----------------- | ------------------------------ |
 | startTime     | number            | 运动开始时间戳, 单位秒(s)      |
+| endTime       | number（可选）     | 运动结束时间戳, 单位秒(s)      |
 | exerciseTime  | number            | 运动时长,单位秒(s)             |
-| workModel     | BleActivityMode   | 运动类型                       |
+| height        | number（可选）     | 海拔高度                       |
+| barometricPressure | number（可选） | 气压                           |
+| cadence       | number（可选）     | 步频,步/分钟                   |
+| workModel     | number            | 运动类型，对应 `BLE_ACTIVITY_*` 常量 |
 | step          | number            | 步数                           |
 | distance      | number            | 距离,米(m)                     |
 | calorie       | number            | 卡路里, 卡(cal)                |
+| speed         | number（可选）     | 速度,米/小时                   |
+| pace          | number（可选）     | 配速,秒/公里                   |
+| averageHr/maxHr/minHr | number（可选） | 平均/最大/最小心率          |
+| viewType      | number（可选）     | 运动数据显示类型               |
+| maxCadence/minCadence | number（可选） | 最大/最小步频                    |
+| maxPace/minPace | number（可选）   | 最大/最小配速                    |
+| hrCount       | number（可选）     | 心率数据数量                   |
 | newSportHrs   | number[]          | 运动心率列表, 1分钟保存一个    |
-| pacePerKmList | number[]          | 每公里配速列表, 单位秒/公里    |
+| pacePerKmList | number[]（可选）   | 每公里配速列表, 单位秒/公里    |
 
 调用示例:
 
 ```typescript
 const results = await RwBleSdk.getSportResult()
-;(results as SportResultBean[]).forEach(r => {
+results.forEach(r => {
   console.log(`运动: ${r.workModel} 时长:${r.exerciseTime}s 步数:${r.step}`)
 })
 ```
@@ -1582,7 +1722,7 @@ const results = await RwBleSdk.getSportResult()
 >
 > 配置表属性: `isSupportSensorRawPPG` (PPG), `isSupportSensorRawACC` (ACC), `isSupportSensorRawPPGRed` (PPG Red), `isSupportSensorRawIR` (IR), `isSupportSensorRawSleep` (睡眠实时数据);
 >
-> **注意: 睡眠实时数据(sensorType=5)无需手动启动与关闭, 设备支持时会在睡眠过程中自动推送.**
+> **注意: 睡眠实时数据对应回调结果 `SensorRawDataBean.type=5`，无需手动启动与关闭，设备支持时会在睡眠过程中自动推送。控制参数 `sensorType=5` 表示红光 + ACC，不表示睡眠。**
 
 sensorType 合法组合:
 
@@ -1600,13 +1740,25 @@ sensorType 合法组合:
 
 > **规则: 绿光与红光不能共存; 红外不能单独启动,必须与绿光或红光组合使用.**
 
+返回数据 `SensorRawDataBean` 格式说明:
+
+| 字段           | 类型              | 说明                                    |
+| -------------- | ----------------- | --------------------------------------- |
+| type           | number            | 0=设备时间, 1=PPG, 2=ACC, 3=PPG Red, 4=IR, 5=睡眠 |
+| timestamp      | number（可选） | `type=0`时的设备时间戳                  |
+| ppgDataList    | number[]（可选） | PPG数据列表                             |
+| accDataList    | AccRawItem[]（可选） | ACC数据列表, 每项包含 `x/y/z`         |
+| ppgRedDataList | number[]（可选） | PPG Red数据列表                         |
+| irDataList     | number[]（可选） | IR红外数据列表                          |
+| sleepDataList  | SleepRawItem[]（可选） | 睡眠数据: `time`(时间戳), `mode`(睡眠模式) |
+
 ##### 3.2.5.0 PPG定时监测
 
 > 配置表属性: `isSupportPPGMonitoring`
 
 `RwBleSdk.setTimedPPG(bean: DrinkReminderBean): Promise<void>`
 
-`RwBleSdk.getTimedPPG(): Promise<Object>`
+`RwBleSdk.getTimedPPG(): Promise<DrinkReminderBean>`
 
 > 用法同心率定时监测(3.2.2.2.1)一致.
 
@@ -1616,8 +1768,6 @@ sensorType 合法组合:
 
 `RwBleSdk.controlSensorRaw(outputType: number, sensorType: number): Promise<void>`
 
-`RwBleSdk.onSensorRawData(cb: (value: Object) => void): () => void`
-
 参数说明:
 
 | 参数       | 类型   | 说明         | 值                                     |
@@ -1625,57 +1775,76 @@ sensorType 合法组合:
 | outputType | number | 输出控制类型 | 1: 开启Sensor输出<br>2: 关闭Sensor输出 |
 | sensorType | number | 传感器类型   | 见上方合法组合表                       |
 
-返回数据 SensorRawDataBean 格式说明:
+调用示例:
 
-| 字段           | 类型              | 说明                                    |
-| -------------- | ----------------- | --------------------------------------- |
-| type           | number            | 1=PPG, 2=ACC, 3=PPG Red, 4=IR, 5=睡眠  |
-| ppgDataList    | number[]          | PPG数据列表                             |
-| accDataList    | AccRawItem[]      | ACC数据列表, 每项含x,y,z               |
-| ppgRedDataList | number[]          | PPG Red数据列表                         |
-| irDataList     | number[]          | IR红外数据列表                          |
-| sleepDataList  | SleepRawItem[]    | 睡眠数据: time(时间戳), mode(睡眠模式)  |
+```typescript
+// 开启PPG+ACC
+await RwBleSdk.controlSensorRaw(1, 3)
+
+// 关闭PPG+ACC
+await RwBleSdk.controlSensorRaw(2, 3)
+```
+
+设备也可能主动停止传感器输出。当前 HarmonyOS SDK 使用 Promise 返回启动/关闭指令应答，实时数据通过下一节的订阅接口获取。
+
+
+##### 3.2.5.2 数据获取方式
+
+> 传感器原始数据有两种获取方式，**由设备端决定使用哪种，APP不可选择**:
+>
+> (1) 实时推送: 启动后设备实时推送数据到APP;
+>
+> (2) 历史获取: 设备先采集保存，APP后续主动同步获取。
+
+###### 3.2.5.2.1 实时推送
+
+> 启动传感器后，通过 `SensorRawDataBean` 接收设备实时推送的原始数据。
+
+方法说明:
+
+`RwBleSdk.onSensorRawData(cb: (value: SensorRawDataBean) => void): () => void`
 
 调用示例:
 
 ```typescript
-// 订阅传感器数据
-const unsub = RwBleSdk.onSensorRawData((data) => {
-  const sensorData = data as SensorRawDataBean
-  switch (sensorData.type) {
-    case 1: console.log(`PPG: ${sensorData.ppgDataList?.length ?? 0}项`); break
-    case 2: console.log(`ACC: ${sensorData.accDataList?.length ?? 0}项`); break
-    case 3: console.log(`PPG Red: ${sensorData.ppgRedDataList?.length ?? 0}项`); break
-    case 4: console.log(`IR: ${sensorData.irDataList?.length ?? 0}项`); break
-    case 5: console.log(`Sleep: ${sensorData.sleepDataList?.length ?? 0}项`); break
+const unsubscribe = RwBleSdk.onSensorRawData((data) => {
+  switch (data.type) {
+    case 1: console.log(`PPG: ${data.ppgDataList?.length ?? 0}项`); break
+    case 2: console.log(`ACC: ${data.accDataList?.length ?? 0}项`); break
+    case 3: console.log(`PPG Red: ${data.ppgRedDataList?.length ?? 0}项`); break
+    case 4: console.log(`IR: ${data.irDataList?.length ?? 0}项`); break
+    case 5: console.log(`Sleep: ${data.sleepDataList?.length ?? 0}项`); break
   }
 })
 
-// 开启PPG+ACC
 await RwBleSdk.controlSensorRaw(1, 3)
 
-// 关闭
+// 页面退出时关闭并取消订阅
 await RwBleSdk.controlSensorRaw(2, 3)
-unsub()
+unsubscribe()
 ```
 
 
-##### 3.2.5.2 历史传感器数据获取
+###### 3.2.5.2.2 历史获取
 
 > 获取设备保存的传感器历史原始数据.
 
 方法说明:
 
-`RwBleSdk.getSensorHistoryRaw(): Promise<Object>`
+`RwBleSdk.getSensorHistoryRaw(): Promise<SensorHistoryRawBean[]>`
+
+返回设备历史传感器记录。`type` 为 1/2/3/4 时分别使用 `ppgDataList`、`accDataList`、`ppgRedDataList`、`irDataList`；`sequence` 为设备记录序号。
 
 调用示例:
 
 ```typescript
 try {
   const history = await RwBleSdk.getSensorHistoryRaw()
-  console.log(`传感器历史: ${JSON.stringify(history)}`)
+  history.forEach(item => {
+    console.log(`类型:${item.type} 序号:${item.sequence}`)
+  })
 } catch (e) {
-  console.error('获取传感器历史失败', e.message)
+  console.error('获取传感器历史失败', JSON.stringify(e))
 }
 ```
 
@@ -1683,10 +1852,8 @@ try {
 
 ## SDK修订记录
 
-**v1.0.0_20260701** (2026.07.01)
+**v2.0.0_20260716** (2026.07.16)
 - HarmonyOS SDK 首版发布
-- 基于 Android SDKV2.0 移植
-- API 采用 Promise + 订阅混合模式
 
 
 ## 联系方式 / 技术支持

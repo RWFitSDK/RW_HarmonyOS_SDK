@@ -1,10 +1,16 @@
 import { common } from '@kit.AbilityKit';
+import { uniformTypeDescriptor } from '@kit.ArkData';
 import { promptAction } from '@kit.ArkUI';
+import { fileUri } from '@kit.CoreFileKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { systemShare } from '@kit.ShareKit';
 import fs from '@ohos.file.fs';
 import zlib from '@ohos.zlib';
 import { DrinkReminderBean, FirmVersionBean, HealthDataSyncBean, PowerBean, RwBleDevice, RwBleSdk, SupportMenuBean } from 'rw_ble_sdk';
 import { SavedDeviceStore } from '../model/SavedDeviceStore';
+
+const TELINK_OTA_FILE_NAME = 'TL01V10_TL01_40010000_V2.2.6_HBAT_20260710_20594277.bin'
+const PXI_OTA_FILE_NAME = 'SY14V10_SR16_30380000_V2.5.4_HBAT_20260521_17100805.bin'
 
 @Entry
 @Component
@@ -18,11 +24,12 @@ struct HomePage {
   @State private hrMeasuring: boolean = false
   @State private connecting: boolean = false
   @State private menu: SupportMenuBean | null = null
+  @State private otaRunning: boolean = false
+  @State private otaProgress: number = 0
 
   private context(): common.Context {
     return this.getUIContext().getHostContext() as common.Context
   }
-  private reconnectTimer: number = -1
   private realtimeUnsub: (() => void) | null = null
 
   aboutToAppear(): void {
@@ -58,7 +65,6 @@ struct HomePage {
         this.deviceName = '已断开'
         this.hrMeasuring = false
         this.menu = null
-        this.clearReconnectTimer()
         this.addLog(`已断开: ${reason}`)
         this.showToast('设备已断开')
       },
@@ -67,7 +73,6 @@ struct HomePage {
         this.menu = menuBean
         this.connected = true
         this.deviceName = menuBean.name ?? this.savedDevice?.name ?? '设备'
-        this.clearReconnectTimer()
         this.showToast('连接成功')
         if (this.savedDevice) {
           const updated: RwBleDevice = {
@@ -115,6 +120,7 @@ struct HomePage {
 
           this.ConnectionSection()
           this.DeviceInfoSection()
+          this.OtaSection()
           this.RealtimeHealthSection()
           this.TimedHealthSection()
           this.HealthSyncSection()
@@ -156,7 +162,7 @@ struct HomePage {
           .onClick(() => this.goScan())
           .layoutWeight(1)
         Button('重连设备')
-          .enabled(!!this.savedDevice && !this.connected)
+          .enabled(!!this.savedDevice && !this.connected && !this.connecting)
           .onClick(() => this.reconnect())
           .layoutWeight(1)
         Button('解绑')
@@ -189,6 +195,37 @@ struct HomePage {
           .layoutWeight(1)
       }
       .width('100%')
+    }
+    .sectionStyle()
+  }
+
+  @Builder
+  private OtaSection() {
+    Column({ space: 10 }) {
+      Text('OTA升级测试').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
+      Text(`Telink: ${TELINK_OTA_FILE_NAME}`)
+        .fontSize(11)
+        .fontColor('#687076')
+        .width('100%')
+      Text(`PXI: ${PXI_OTA_FILE_NAME}`)
+        .fontSize(11)
+        .fontColor('#687076')
+        .width('100%')
+      Text('升级过程中请保持设备连接和电量充足，勿退出应用。')
+        .fontSize(12)
+        .fontColor('#B45309')
+        .width('100%')
+      Text(`进度: ${this.otaProgress}%`)
+        .fontSize(13)
+        .width('100%')
+      Button(this.otaRunning ? 'OTA升级中...' : '使用 Telink 固件升级')
+        .enabled(this.connected && !this.otaRunning)
+        .onClick(() => this.startBundledOta(TELINK_OTA_FILE_NAME, 'Telink'))
+        .width('100%')
+      Button(this.otaRunning ? 'OTA升级中...' : '使用 PXI 固件升级')
+        .enabled(this.connected && !this.otaRunning)
+        .onClick(() => this.startBundledOta(PXI_OTA_FILE_NAME, 'PXI'))
+        .width('100%')
     }
     .sectionStyle()
   }
@@ -350,7 +387,6 @@ struct HomePage {
     .sectionStyle()
   }
 
-  @Builder
   @Builder
   private LogSection() {
     Column({ space: 10 }) {
@@ -608,7 +644,18 @@ struct HomePage {
     this.savedDeviceText = `${this.savedDevice.name ?? '未命名'} (${this.savedDevice.deviceId})`
   }
 
-  private goScan(): void {
+  private async goScan(): Promise<void> {
+    // Match the Android demo: searching again means replacing the bound device,
+    // so discard both the live connection and the persisted device first.
+    RwBleSdk.stopScan()
+    RwBleSdk.disconnect()
+    await SavedDeviceStore.clear(this.context())
+    this.savedDevice = null
+    this.menu = null
+    this.connected = false
+    this.connecting = false
+    this.deviceName = '未连接'
+    this.refreshSavedText()
     try { this.getUIContext().getRouter().pushUrl({ url: 'pages/ScanPage' }) } catch (_e) {}
   }
 
@@ -620,29 +667,76 @@ struct HomePage {
     try { this.getUIContext().getRouter().pushUrl({ url: 'pages/WorkoutTypePage' }) } catch (_e) {}
   }
 
-  private async reconnect(): Promise<void> {
-    if (!this.savedDevice) return
+  private reconnect(): void {
+    const saved = this.savedDevice
+    if (!saved || this.connecting) return
+    let matched = false
     this.connecting = true
-    this.addLog('重连中...')
-    this.reconnectTimer = setTimeout(() => {
-      if (this.connecting) {
+    this.deviceName = '正在搜索设备'
+    this.addLog(`搜索已保存设备: ${saved.mac ?? saved.deviceId}`)
+    RwBleSdk.startScan({
+      onScanDevice: (device: RwBleDevice) => {
+        if (matched || !this.matchesSavedDevice(device, saved)) return
+        matched = true
+        RwBleSdk.stopScan()
+        this.connectScannedDevice(saved, device)
+      },
+      onScanFinish: () => {
+        if (matched) return
         this.connecting = false
-        this.showToast('重连超时，请确认设备在附近')
-        this.addLog('重连超时')
+        this.deviceName = '未发现设备'
+        this.addLog('重连扫描超时，未发现已保存设备')
+        this.showToast('未发现已保存设备，请确认设备在附近')
+      },
+      onError: (_code: number, error: Error) => {
+        if (matched) return
+        this.connecting = false
+        this.deviceName = '扫描失败'
+        this.addLog(`重连扫描失败: ${error.message}`)
+        this.showToast('扫描失败，请检查蓝牙权限')
       }
-    }, 15000)
-    RwBleSdk.reconnectDevice(this.savedDevice)
+    })
+  }
+
+  private matchesSavedDevice(device: RwBleDevice, saved: RwBleDevice): boolean {
+    const deviceMac = this.normalizeDeviceAddress(device.mac)
+    const savedMac = this.normalizeDeviceAddress(saved.mac)
+    if (deviceMac && savedMac) return deviceMac === savedMac
+
+    // Compatibility fallback for records created before manufacturer MAC
+    // parsing was available.
+    const currentIds: Array<string> = [device.deviceId, device.uuid ?? '', device.mac ?? '']
+      .map((value: string) => this.normalizeDeviceAddress(value))
+      .filter((value: string) => value.length > 0)
+    const savedIds: Array<string> = [saved.deviceId, saved.uuid ?? '', saved.mac ?? '']
+      .map((value: string) => this.normalizeDeviceAddress(value))
+      .filter((value: string) => value.length > 0)
+    return currentIds.some((value: string) => savedIds.includes(value))
+  }
+
+  private normalizeDeviceAddress(value?: string): string {
+    return (value ?? '').replace(/[:-]/g, '').toUpperCase()
+  }
+
+  private async connectScannedDevice(saved: RwBleDevice, scanned: RwBleDevice): Promise<void> {
+    const refreshed: RwBleDevice = {
+      deviceId: scanned.deviceId,
+      name: scanned.name ?? saved.name,
+      mac: scanned.mac ?? saved.mac,
+      uuid: scanned.uuid ?? scanned.deviceId,
+      rssi: scanned.rssi,
+      brand: scanned.brand ?? saved.brand,
+      data: scanned.data
+    }
+    await SavedDeviceStore.save(this.context(), refreshed)
+    this.savedDevice = refreshed
+    this.refreshSavedText()
+    this.addLog(`已找到保存设备: mac=${refreshed.mac ?? '-'} deviceId=${refreshed.deviceId}`)
+    RwBleSdk.reconnectDevice(refreshed)
   }
 
   private async unbindAndSearch(): Promise<void> {
-    RwBleSdk.disconnect()
-    await SavedDeviceStore.clear(this.context())
-    this.savedDevice = null
-    this.menu = null
-    this.connected = false
-    this.deviceName = '未连接'
-    this.refreshSavedText()
-    this.goScan()
+    await this.goScan()
   }
 
   private async getPower(): Promise<void> {
@@ -666,6 +760,54 @@ struct HomePage {
     } catch (e) { this.addLog(`获取MAC失败: ${JSON.stringify(e)}`) }
   }
 
+  private async startBundledOta(fileName: string, platform: string): Promise<void> {
+    if (!this.connected || this.otaRunning) return
+    this.otaRunning = true
+    this.otaProgress = 0
+    this.addLog(`准备${platform} OTA固件: ${fileName}`)
+    try {
+      const ctx = this.context()
+      const firmware = await ctx.resourceManager.getRawFileContent(fileName)
+      const otaPath = `${ctx.cacheDir}/${fileName}`
+      const file = fs.openSync(otaPath,
+        fs.OpenMode.CREATE | fs.OpenMode.TRUNC | fs.OpenMode.WRITE_ONLY)
+      try {
+        const buffer = firmware.buffer.slice(firmware.byteOffset,
+          firmware.byteOffset + firmware.byteLength)
+        const written = fs.writeSync(file.fd, buffer)
+        if (written !== firmware.byteLength) {
+          throw new Error(`固件写入不完整: ${written}/${firmware.byteLength}`)
+        }
+      } finally {
+        fs.closeSync(file.fd)
+      }
+      this.addLog(`开始${platform} OTA，固件大小: ${firmware.byteLength} bytes`)
+      RwBleSdk.ringOtaWithFileData(otaPath, {
+        onProgress: (progress: number) => {
+          const percent = Math.min(100, Math.max(0, Math.floor(progress * 100)))
+          if (percent === this.otaProgress) return
+          this.otaProgress = percent
+          if (percent % 10 === 0 || percent === 100) this.addLog(`OTA进度: ${percent}%`)
+        },
+        onSuccess: () => {
+          this.otaProgress = 100
+          this.otaRunning = false
+          this.addLog('OTA升级完成')
+          this.showToast('OTA升级完成')
+        },
+        onError: (code: number) => {
+          this.otaRunning = false
+          this.addLog(`OTA升级失败: code=${code}`)
+          this.showToast(`OTA升级失败: ${code}`)
+        }
+      })
+    } catch (e) {
+      this.otaRunning = false
+      this.addLog(`OTA固件准备失败: ${JSON.stringify(e)}`)
+      this.showToast('OTA固件准备失败')
+    }
+  }
+
   private async setDate(): Promise<void> {
     try {
       await RwBleSdk.setDate()
@@ -673,16 +815,13 @@ struct HomePage {
     } catch (e) { this.addLog(`同步时间失败: ${JSON.stringify(e)}`) }
   }
 
-  private clearReconnectTimer(): void {
-    if (this.reconnectTimer >= 0) clearTimeout(this.reconnectTimer)
-    this.reconnectTimer = -1
-  }
-
   private async shareLogs(): Promise<void> {
     try {
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext
       const logDir = `${ctx.filesDir}/logger/devices`
       const zipPath = `${ctx.cacheDir}/rwsdk_logs.zip`
+      // Persist the latest buffered BLE events before collecting the files.
+      RwBleSdk.flushLog()
       // Check if log dir exists and has files
       if (!fs.accessSync(logDir)) {
         this.showToast('暂无日志文件')
@@ -699,17 +838,22 @@ struct HomePage {
       }
       // Zip the log directory
       await zlib.compressFile(logDir, zipPath, { level: zlib.CompressLevel.COMPRESS_LEVEL_DEFAULT_COMPRESSION })
-      // Share via startAbility with ACTION_SEND
-      await ctx.startAbility({
-        action: 'ohos.want.action.sendData',
-        type: 'application/zip',
-        uri: `file://${zipPath}`,
-        parameters: {
-          'ability.params.stream': [zipPath]
-        }
+      // SystemShare authorizes this sandbox file URI for the selected receiver.
+      const uri = fileUri.getUriFromPath(zipPath)
+      const sharedData = new systemShare.SharedData({
+        utd: uniformTypeDescriptor.UniformDataType.ZIP_ARCHIVE,
+        uri,
+        title: 'RW SDK 日志',
+        description: `${files.length} 个日志文件`
+      })
+      const controller = new systemShare.ShareController(sharedData)
+      await controller.show(ctx, {
+        selectionMode: systemShare.SelectionMode.SINGLE,
+        previewMode: systemShare.SharePreviewMode.DETAIL
       })
     } catch (e) {
       this.addLog(`分享日志失败: ${JSON.stringify(e)}`)
+      this.showToast('分享日志失败')
     }
   }
 

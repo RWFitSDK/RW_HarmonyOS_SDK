@@ -9,7 +9,7 @@ RW_HarmonyOS_SDK/
 ├── demo/                          # DevEco Studio Demo 工程
 │   └── rw_ble_sdk_demo/            # Demo entry module
 ├── libs/
-│   └── rw_ble_sdk_260616.har       # SDK HAR 包
+│   └── rw_ble_sdk.har              # SDK HAR 包
 └── docs/
     └── HarmonyOS_BleSdk_使用说明.md # SDK 接入和 API 使用说明
 ```
@@ -27,7 +27,7 @@ RW_HarmonyOS_SDK/demo
 Demo 通过本地 HAR 依赖 SDK：
 
 ```json5
-"rw_ble_sdk": "file:../../libs/rw_ble_sdk_260616.har"
+"rw_ble_sdk": "file:../../libs/rw_ble_sdk.har"
 ```
 
 如果 DevEco 没有自动解析依赖，请在 `demo` 目录执行 `ohpm install` 后重新 Sync。

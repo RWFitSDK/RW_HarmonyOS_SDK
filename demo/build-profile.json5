@@ -1,24 +1,8 @@
 {
   "app": {
-    "signingConfigs": [
-      {
-        "name": "default",
-        "type": "HarmonyOS",
-        "material": {
-          "certpath": "/Users/dhs/.ohos/config/default_rwsdk_harmonyos_yl_Ai6RK-_lD6Re6cRAcQpISQUdSToLmrXD-Skr2COA=.cer",
-          "keyAlias": "debugKey",
-          "keyPassword": "0000001B0DB093DE86CDEF1BBD6910F9B2BF79632E3B419C981DE0CC3BBB1344274BE106896876983E5661",
-          "profile": "/Users/dhs/.ohos/config/default_rwsdk_harmonyos_yl_Ai6RK-_lD6Re6cRAcQpISQUdSToLmrXD-Skr2COA=.p7b",
-          "signAlg": "SHA256withECDSA",
-          "storeFile": "/Users/dhs/.ohos/config/default_rwsdk_harmonyos_yl_Ai6RK-_lD6Re6cRAcQpISQUdSToLmrXD-Skr2COA=.p12",
-          "storePassword": "0000001B31780C6777DBA0F7951A5F1F9DEB1B9CBCB1A22CC0E814069C93CFCBA99D0E767E47BF68762835"
-        }
-      }
-    ],
     "products": [
       {
         "name": "default",
-        "signingConfig": "default",
         "compatibleSdkVersion": "5.0.0(12)",
         "targetSdkVersion": "5.0.0(12)",
         "runtimeOS": "HarmonyOS",

@@ -1,5 +1,5 @@
 import { promptAction } from '@kit.ArkUI';
-import { BLE_ACTIVITY_START_INDEX, RwBleSdk, WORKOUT_BEGIN, WORKOUT_FINISH } from 'rw_ble_sdk';
+import { BleActivityMode, RwBleSdk, WorkoutControlType } from 'rw_ble_sdk';
 
 @Entry
 @Component
@@ -54,7 +54,7 @@ struct WorkoutTypePage {
                   .fontSize(16)
                   .fontColor('#1F2937')
                   .layoutWeight(1)
-                Text(`${BLE_ACTIVITY_START_INDEX + index}`)
+                Text(`${BleActivityMode.BLE_ACTIVITY_START_INDEX + index}`)
                   .fontSize(12)
                   .fontColor('#9CA3AF')
               }
@@ -107,7 +107,7 @@ struct WorkoutTypePage {
 
   private async startWorkout(index: number): Promise<void> {
     if (this.loading) return
-    const sportType: number = BLE_ACTIVITY_START_INDEX + index
+    const sportType = BleActivityMode.BLE_ACTIVITY_START_INDEX + index
     this.loading = true
     try {
       const current = await RwBleSdk.getSportStatus()
@@ -117,8 +117,8 @@ struct WorkoutTypePage {
         this.goRunning(status.sportType, status.status)
         return
       }
-      await RwBleSdk.controlSport(sportType, WORKOUT_BEGIN)
-      this.goRunning(sportType, WORKOUT_BEGIN)
+      await RwBleSdk.controlSport(sportType, WorkoutControlType.Workout_Begin)
+      this.goRunning(sportType, WorkoutControlType.Workout_Begin)
     } catch (e) {
       this.showToast(`启动失败: ${JSON.stringify(e)}`)
     } finally {
@@ -127,11 +127,11 @@ struct WorkoutTypePage {
   }
 
   private isInRunning(status: number): boolean {
-    return status >= WORKOUT_BEGIN && status < WORKOUT_FINISH
+    return status >= WorkoutControlType.Workout_Begin && status < WorkoutControlType.Workout_Finish
   }
 
   private nameForSport(sportType: number): string {
-    const index = sportType - BLE_ACTIVITY_START_INDEX
+    const index = sportType - BleActivityMode.BLE_ACTIVITY_START_INDEX
     return index >= 0 && index < this.workoutNames.length ? this.workoutNames[index] : `类型${sportType}`
   }
 

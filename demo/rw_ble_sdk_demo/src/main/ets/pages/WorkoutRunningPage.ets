@@ -1,19 +1,11 @@
 import { promptAction } from '@kit.ArkUI';
-import {
-  BLE_ACTIVITY_RUNNING,
-  BLE_ACTIVITY_START_INDEX,
-  RwBleSdk,
-  WORKOUT_BEGIN,
-  WORKOUT_CONTINUE,
-  WORKOUT_FINISH,
-  WORKOUT_PAUSE
-} from 'rw_ble_sdk';
+import { BleActivityMode, RwBleSdk, WorkoutControlType } from 'rw_ble_sdk';
 
 @Entry
 @Component
 struct WorkoutRunningPage {
-  @State private sportType: number = BLE_ACTIVITY_RUNNING
-  @State private controlType: number = WORKOUT_BEGIN
+  @State private sportType: number = BleActivityMode.RUNNING
+  @State private controlType: number = WorkoutControlType.Workout_Begin
   @State private workoutName: string = '跑步'
   @State private timeText: string = '00:00:00'
   @State private stepText: string = '0'
@@ -146,23 +138,23 @@ struct WorkoutRunningPage {
   private loadParams(): void {
     try {
       const params = this.getUIContext().getRouter().getParams() as WorkoutRouteParams
-      this.sportType = params?.sportType ?? BLE_ACTIVITY_RUNNING
-      this.controlType = params?.controlType ?? WORKOUT_BEGIN
+      this.sportType = params?.sportType ?? BleActivityMode.RUNNING
+      this.controlType = params?.controlType ?? WorkoutControlType.Workout_Begin
     } catch (_e) {
-      this.sportType = BLE_ACTIVITY_RUNNING
-      this.controlType = WORKOUT_BEGIN
+      this.sportType = BleActivityMode.RUNNING
+      this.controlType = WorkoutControlType.Workout_Begin
     }
   }
 
   private updateWorkoutTitle(): void {
-    const index = this.sportType - BLE_ACTIVITY_START_INDEX
+    const index = this.sportType - BleActivityMode.BLE_ACTIVITY_START_INDEX
     this.workoutName = index >= 0 && index < this.workoutNames.length ? this.workoutNames[index] : `类型${this.sportType}`
   }
 
   private updateStatusText(): void {
-    if (this.controlType === WORKOUT_PAUSE) {
+    if (this.controlType === WorkoutControlType.Workout_Pause) {
       this.statusText = '已暂停'
-    } else if (this.controlType === WORKOUT_FINISH) {
+    } else if (this.controlType === WorkoutControlType.Workout_Finish) {
       this.statusText = '已结束'
     } else {
       this.statusText = '运动中'
@@ -188,21 +180,21 @@ struct WorkoutRunningPage {
     }
     this.controlType = data.status
     this.updateStatusText()
-    if (data.status === WORKOUT_FINISH) {
+    if (data.status === WorkoutControlType.Workout_Finish) {
       this.startSyncWorkoutData()
     }
   }
 
   private async finishWorkout(): Promise<void> {
-    await this.sendControl(WORKOUT_FINISH)
+    await this.sendControl(WorkoutControlType.Workout_Finish)
   }
 
   private async pauseWorkout(): Promise<void> {
-    await this.sendControl(WORKOUT_PAUSE)
+    await this.sendControl(WorkoutControlType.Workout_Pause)
   }
 
   private async continueWorkout(): Promise<void> {
-    await this.sendControl(WORKOUT_CONTINUE)
+    await this.sendControl(WorkoutControlType.Workout_Continue)
   }
 
   private async sendControl(status: number): Promise<void> {
@@ -210,7 +202,7 @@ struct WorkoutRunningPage {
       await RwBleSdk.controlSport(this.sportType, status)
       this.controlType = status
       this.updateStatusText()
-      if (status === WORKOUT_FINISH) {
+      if (status === WorkoutControlType.Workout_Finish) {
         this.startSyncWorkoutData()
       }
     } catch (e) {
@@ -233,18 +225,18 @@ struct WorkoutRunningPage {
   }
 
   private showEndButton(): boolean {
-    return this.controlType === WORKOUT_BEGIN ||
-      this.controlType === WORKOUT_CONTINUE ||
-      this.controlType === WORKOUT_PAUSE
+    return this.controlType === WorkoutControlType.Workout_Begin ||
+      this.controlType === WorkoutControlType.Workout_Continue ||
+      this.controlType === WorkoutControlType.Workout_Pause
   }
 
   private showPauseButton(): boolean {
-    return this.controlType === WORKOUT_BEGIN ||
-      this.controlType === WORKOUT_CONTINUE
+    return this.controlType === WorkoutControlType.Workout_Begin ||
+      this.controlType === WorkoutControlType.Workout_Continue
   }
 
   private showContinueButton(): boolean {
-    return this.controlType === WORKOUT_PAUSE
+    return this.controlType === WorkoutControlType.Workout_Pause
   }
 
   private pad2(value: number): string {
