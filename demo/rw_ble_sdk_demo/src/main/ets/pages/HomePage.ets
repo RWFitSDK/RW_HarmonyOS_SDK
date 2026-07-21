@@ -9,8 +9,8 @@ import zlib from '@ohos.zlib';
 import { DrinkReminderBean, FirmVersionBean, HealthDataSyncBean, PowerBean, RwBleDevice, RwBleSdk, SupportMenuBean } from 'rw_ble_sdk';
 import { SavedDeviceStore } from '../model/SavedDeviceStore';
 
-const TELINK_OTA_FILE_NAME = 'TL01V10_TL01_40010000_V2.2.6_HBAT_20260710_20594277.bin'
-const PXI_OTA_FILE_NAME = 'SY14V10_SR16_30380000_V2.5.4_HBAT_20260521_17100805.bin'
+// Demo 不内置固件。测试 OTA 前，请配置为应用可访问的固件文件路径。
+const OTA_FILE_PATH = ''
 
 @Entry
 @Component
@@ -99,10 +99,16 @@ struct HomePage {
     Stack() {
       Scroll() {
         Column({ space: 14 }) {
-          Text('RW BLE Demo')
-            .fontSize(28)
-            .fontWeight(FontWeight.Bold)
-            .width('100%')
+          Row({ space: 12 }) {
+            Text('RW BLE Demo')
+              .fontSize(28)
+              .fontWeight(FontWeight.Bold)
+              .layoutWeight(1)
+            Button('分享日志')
+              .type(ButtonType.Normal)
+              .onClick(() => this.shareLogs())
+          }
+          .width('100%')
 
           // 设备状态栏
           Column({ space: 6 }) {
@@ -203,11 +209,7 @@ struct HomePage {
   private OtaSection() {
     Column({ space: 10 }) {
       Text('OTA升级测试').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-      Text(`Telink: ${TELINK_OTA_FILE_NAME}`)
-        .fontSize(11)
-        .fontColor('#687076')
-        .width('100%')
-      Text(`PXI: ${PXI_OTA_FILE_NAME}`)
+      Text(OTA_FILE_PATH ? `固件路径: ${OTA_FILE_PATH}` : '请先在 Demo 中配置 OTA_FILE_PATH')
         .fontSize(11)
         .fontColor('#687076')
         .width('100%')
@@ -218,13 +220,9 @@ struct HomePage {
       Text(`进度: ${this.otaProgress}%`)
         .fontSize(13)
         .width('100%')
-      Button(this.otaRunning ? 'OTA升级中...' : '使用 Telink 固件升级')
+      Button(this.otaRunning ? 'OTA升级中...' : 'OTA升级')
         .enabled(this.connected && !this.otaRunning)
-        .onClick(() => this.startBundledOta(TELINK_OTA_FILE_NAME, 'Telink'))
-        .width('100%')
-      Button(this.otaRunning ? 'OTA升级中...' : '使用 PXI 固件升级')
-        .enabled(this.connected && !this.otaRunning)
-        .onClick(() => this.startBundledOta(PXI_OTA_FILE_NAME, 'PXI'))
+        .onClick(() => this.startOta())
         .width('100%')
     }
     .sectionStyle()
@@ -392,7 +390,6 @@ struct HomePage {
     Column({ space: 10 }) {
       Row({ space: 8 }) {
         Text('日志').fontSize(18).fontWeight(FontWeight.Medium).layoutWeight(1)
-        Button('分享日志').type(ButtonType.Normal).onClick(() => this.shareLogs())
         Button('清空').type(ButtonType.Normal).onClick(() => this.logText = '')
       }
       Text(this.logText || '暂无日志')
@@ -760,52 +757,35 @@ struct HomePage {
     } catch (e) { this.addLog(`获取MAC失败: ${JSON.stringify(e)}`) }
   }
 
-  private async startBundledOta(fileName: string, platform: string): Promise<void> {
+  private startOta(): void {
     if (!this.connected || this.otaRunning) return
+    if (!OTA_FILE_PATH) {
+      this.addLog('OTA未启动: 请先配置OTA_FILE_PATH')
+      this.showToast('请先配置OTA固件路径')
+      return
+    }
     this.otaRunning = true
     this.otaProgress = 0
-    this.addLog(`准备${platform} OTA固件: ${fileName}`)
-    try {
-      const ctx = this.context()
-      const firmware = await ctx.resourceManager.getRawFileContent(fileName)
-      const otaPath = `${ctx.cacheDir}/${fileName}`
-      const file = fs.openSync(otaPath,
-        fs.OpenMode.CREATE | fs.OpenMode.TRUNC | fs.OpenMode.WRITE_ONLY)
-      try {
-        const buffer = firmware.buffer.slice(firmware.byteOffset,
-          firmware.byteOffset + firmware.byteLength)
-        const written = fs.writeSync(file.fd, buffer)
-        if (written !== firmware.byteLength) {
-          throw new Error(`固件写入不完整: ${written}/${firmware.byteLength}`)
-        }
-      } finally {
-        fs.closeSync(file.fd)
+    this.addLog(`开始OTA: ${OTA_FILE_PATH}`)
+    RwBleSdk.ringOtaWithFileData(OTA_FILE_PATH, {
+      onProgress: (progress: number) => {
+        const percent = Math.min(100, Math.max(0, Math.floor(progress * 100)))
+        if (percent === this.otaProgress) return
+        this.otaProgress = percent
+        if (percent % 10 === 0 || percent === 100) this.addLog(`OTA进度: ${percent}%`)
+      },
+      onSuccess: () => {
+        this.otaProgress = 100
+        this.otaRunning = false
+        this.addLog('OTA升级完成')
+        this.showToast('OTA升级完成')
+      },
+      onError: (code: number) => {
+        this.otaRunning = false
+        this.addLog(`OTA升级失败: code=${code}`)
+        this.showToast(`OTA升级失败: ${code}`)
       }
-      this.addLog(`开始${platform} OTA，固件大小: ${firmware.byteLength} bytes`)
-      RwBleSdk.ringOtaWithFileData(otaPath, {
-        onProgress: (progress: number) => {
-          const percent = Math.min(100, Math.max(0, Math.floor(progress * 100)))
-          if (percent === this.otaProgress) return
-          this.otaProgress = percent
-          if (percent % 10 === 0 || percent === 100) this.addLog(`OTA进度: ${percent}%`)
-        },
-        onSuccess: () => {
-          this.otaProgress = 100
-          this.otaRunning = false
-          this.addLog('OTA升级完成')
-          this.showToast('OTA升级完成')
-        },
-        onError: (code: number) => {
-          this.otaRunning = false
-          this.addLog(`OTA升级失败: code=${code}`)
-          this.showToast(`OTA升级失败: ${code}`)
-        }
-      })
-    } catch (e) {
-      this.otaRunning = false
-      this.addLog(`OTA固件准备失败: ${JSON.stringify(e)}`)
-      this.showToast('OTA固件准备失败')
-    }
+    })
   }
 
   private async setDate(): Promise<void> {
