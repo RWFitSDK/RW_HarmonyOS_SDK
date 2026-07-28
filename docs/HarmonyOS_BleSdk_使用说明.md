@@ -277,6 +277,7 @@ SupportMenuBean 属性定义:
 | isSupportAlarmVibrationDuration | 是否支持闹钟震动时长设置 |
 | isSupportVibrationInterval  | 是否支持震动间隔时长设置 |
 | isStep                      | 是否支持计步             |
+| activityDataInterval        | 当天计步明细间隔（分钟）；未配置时按60处理 |
 | isActivityDataStaticTran2   | 是否支持实时活动数据上报 |
 | isHr                        | 是否支持心率             |
 | isBloodPress                | 是否支持血压             |
@@ -1419,20 +1420,26 @@ RwBleSdk.syncHealthDataByType(RingHealthType.STEP, syncCallback)
      timestamp: number       // 日期时间戳 秒(s)
      date: string            // 日期, yyyy-MM-dd
      hour: string            // 小时, HH
+     activityDataInterval: number // 今天使用设备配置，历史固定60分钟
      totalSteps: number      // 总步数
      totalCalorie: number    // 总卡路里cal
      totalDistance: number   // 总里程m
      itemCount: number       // 数据量
-     items: StepHourItem[]   // 每小时的计步数据
+     items: StepHourItem[]   // 设备返回的计步明细
    }
 
    interface StepHourItem {
-     index: number    // 小时序号(0-23)
-     steps: number    // 步数
-     calorie: number  // 卡路里
-     distance: number // 里程
+     index: number     // 当前粒度下，当天第几个明细点
+     timestamp: number // 明细准确时间戳 秒(s)
+     steps: number     // 步数
+     calorie: number   // 卡路里
+     distance: number  // 里程
    }
    ```
+
+   `activityDataInterval` 表示 `items` 的计步明细间隔，单位为分钟；
+   `60` 表示每小时一条，`10` 表示每10分钟一条，未配置时默认为 `60`。
+   请使用 `timestamp` 作为明细的准确时间。
 
 2. 睡眠数据 `onSyncSleep(data: SleepSyncBean[])`
 
@@ -1851,6 +1858,9 @@ try {
 
 
 ## SDK修订记录
+
+**v2.0.0_20260724** (2026.07.24)
+- 增加计步明细间隔支持
 
 **v2.0.0_20260716** (2026.07.16)
 - HarmonyOS SDK 首版发布
