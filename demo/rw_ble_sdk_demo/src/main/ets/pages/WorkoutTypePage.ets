@@ -1,11 +1,14 @@
 import { promptAction } from '@kit.ArkUI';
-import { BleActivityMode, RwBleSdk, WorkoutControlType } from 'rw_ble_sdk';
+import { BleActivityMode, RwBleSdk, SportResultBean, WorkoutControlType } from 'rw_ble_sdk';
 
 @Entry
 @Component
 struct WorkoutTypePage {
   @State private loading: boolean = false
   @State private statusText: string = '读取当前运动状态中...'
+  @State private keyword: string = ''
+  @State private reports: SportResultBean[] = []
+  @State private reportsLoading: boolean = false
 
   private readonly workoutNames: string[] = [
     '跑步', '跑步机', '户外跑步', '骑行', '游泳', '健走', '登山', '瑜伽', '动感单车', '篮球',
@@ -32,47 +35,132 @@ struct WorkoutTypePage {
 
   build() {
     Stack() {
-      Column({ space: 12 }) {
-        Row() {
-          Button('← 返回').type(ButtonType.Normal)
-            .onClick(() => { try { this.getUIContext().getRouter().back() } catch (_e) {} })
-          Text('Work out type').fontSize(24).fontWeight(FontWeight.Bold).margin({ left: 12 })
-        }
-        .width('100%')
-
-        Text(this.statusText)
-          .fontSize(13)
-          .fontColor('#687076')
-          .width('100%')
-          .padding({ left: 2, right: 2 })
-
-        List({ space: 8 }) {
-          ForEach(this.workoutNames, (name: string, index: number) => {
-            ListItem() {
-              Row() {
-                Text(name)
-                  .fontSize(16)
-                  .fontColor('#1F2937')
-                  .layoutWeight(1)
-                Text(`${BleActivityMode.BLE_ACTIVITY_START_INDEX + index}`)
-                  .fontSize(12)
-                  .fontColor('#9CA3AF')
-              }
-              .width('100%')
-              .height(48)
-              .padding({ left: 14, right: 14 })
-              .backgroundColor('#FFFFFF')
-              .borderRadius(8)
-              .border({ width: 1, color: '#E5E7EB' })
+      Scroll() {
+        Column({ space: 0 }) {
+          Row({ space: 10 }) {
+            Text('‹').fontSize(34).fontColor('#26312C').width(38)
+              .onClick(() => { try { this.getUIContext().getRouter().back() } catch (_e) {} })
+            Column({ space: 4 }) {
+              Text('多运动').fontSize(25).fontWeight(FontWeight.Bold).fontColor('#18221E')
+              Text(this.statusText).fontSize(12).fontColor('#87928D')
             }
-            .onClick(() => this.startWorkout(index))
-          }, (name: string, index: number) => `${index}-${name}`)
+            .alignItems(HorizontalAlign.Start)
+          }
+          .width('100%')
+          .margin({ top: 10, bottom: 22 })
+
+          Row({ space: 10 }) {
+            Text('⌕').fontSize(22).fontColor('#8E9994')
+            TextInput({ placeholder: '搜索运动类型', text: this.keyword })
+              .fontSize(14)
+              .backgroundColor('#FFFFFF')
+              .layoutWeight(1)
+              .onChange((value: string) => this.keyword = value)
+          }
+          .width('100%')
+          .height(52)
+          .padding({ left: 16, right: 16 })
+          .backgroundColor('#FFFFFF')
+          .borderRadius(18)
+
+          Row({ space: 8 }) {
+            Text('选择运动').fontSize(19).fontWeight(FontWeight.Bold).fontColor('#1C2823')
+            Text(`共 ${this.filteredWorkoutNames().length} 项`).fontSize(12).fontColor('#8A948F')
+          }
+          .width('100%')
+          .margin({ top: 25, bottom: 13 })
+
+          if (this.filteredWorkoutNames().length > 0) {
+            Grid() {
+              ForEach(this.filteredWorkoutNames(), (name: string) => {
+                GridItem() {
+                  Row({ space: 11 }) {
+                    Text(name.substring(0, 1)).fontSize(13).fontWeight(FontWeight.Bold).fontColor('#0B9066')
+                      .textAlign(TextAlign.Center).width(38).height(38).backgroundColor('#E5F4ED').borderRadius(12)
+                    Text(name).fontSize(14).fontWeight(FontWeight.Medium).fontColor('#26312C')
+                      .maxLines(2).layoutWeight(1)
+                    Text(`${this.sportCodeForName(name)}`).fontSize(9).fontColor('#BAC2BE')
+                  }
+                  .width('100%')
+                  .height(70)
+                  .padding({ left: 12, right: 10 })
+                  .backgroundColor('#FFFFFF')
+                  .borderRadius(18)
+                  .onClick(() => this.startWorkout(this.workoutNames.indexOf(name)))
+                }
+              }, (name: string) => name)
+            }
+            .columnsTemplate('1fr 1fr')
+            .columnsGap(10)
+            .rowsGap(10)
+            .width('100%')
+          } else {
+            Column({ space: 8 }) {
+              Text('没有匹配的运动').fontSize(17).fontWeight(FontWeight.Bold).fontColor('#1C2823')
+              Text('请更换关键词后重试').fontSize(13).fontColor('#909A95')
+            }
+            .justifyContent(FlexAlign.Center)
+            .width('100%')
+            .height(130)
+            .backgroundColor('#FFFFFF')
+            .borderRadius(20)
+          }
+
+          Row() {
+            Row({ space: 8 }) {
+              Text('历史报告').fontSize(19).fontWeight(FontWeight.Bold).fontColor('#1C2823')
+              Text(`${this.reports.length} 条`).fontSize(12).fontColor('#8A948F')
+            }
+            .layoutWeight(1)
+            Button(this.reportsLoading ? '加载中' : '从设备加载')
+              .fontSize(12).fontColor('#087D59').backgroundColor('#E1F3EB').borderRadius(20)
+              .enabled(!this.reportsLoading)
+              .onClick(() => this.loadReports())
+          }
+          .width('100%')
+          .margin({ top: 26, bottom: 13 })
+
+          if (this.reports.length > 0) {
+            Column() {
+              ForEach(this.reports, (report: SportResultBean, index: number) => {
+                Column() {
+                  Row() {
+                    Column({ space: 5 }) {
+                      Text(`${this.nameForSport(report.workModel)} · ${(report.exerciseTime / 60).toFixed(0)} 分钟`)
+                        .fontSize(15).fontWeight(FontWeight.Medium).fontColor('#26312C')
+                      Text(`${report.step} 步 · ${(report.distance / 1000).toFixed(2)} km · ${(report.calorie / 1000).toFixed(1)} kcal`)
+                        .fontSize(11).fontColor('#8F9994')
+                    }
+                    .alignItems(HorizontalAlign.Start)
+                    .layoutWeight(1)
+                    Text(this.dateText(report.startTime)).fontSize(10).fontColor('#7F8A85')
+                  }
+                  .width('100%')
+                  .padding(16)
+                  if (index < this.reports.length - 1) Divider().strokeWidth(1).color('#EDF0EE')
+                }
+              }, (report: SportResultBean) => `${report.startTime}`)
+            }
+            .width('100%')
+            .backgroundColor('#FFFFFF')
+            .borderRadius(20)
+          } else {
+            Column({ space: 8 }) {
+              Text('暂无运动记录').fontSize(17).fontWeight(FontWeight.Bold).fontColor('#1C2823')
+              Text('运动超过 2 分钟并正常结束后，设备才会保存报告。')
+                .fontSize(13).fontColor('#909A95').textAlign(TextAlign.Center)
+            }
+            .justifyContent(FlexAlign.Center)
+            .width('100%')
+            .padding({ top: 30, bottom: 30, left: 20, right: 20 })
+            .backgroundColor('#FFFFFF')
+            .borderRadius(20)
+          }
         }
+        .alignItems(HorizontalAlign.Start)
         .width('100%')
-        .layoutWeight(1)
+        .padding({ left: 18, right: 18, bottom: 30 })
       }
-      .padding(16)
-      .width('100%')
       .height('100%')
 
       if (this.loading) {
@@ -88,6 +176,35 @@ struct WorkoutTypePage {
     }
     .width('100%')
     .height('100%')
+    .backgroundColor('#F4F7F5')
+  }
+
+  private filteredWorkoutNames(): string[] {
+    const query = this.keyword.trim().toLowerCase()
+    if (query.length === 0) return this.workoutNames
+    return this.workoutNames.filter((name: string) => name.toLowerCase().includes(query))
+  }
+
+  private sportCodeForName(name: string): number {
+    return BleActivityMode.BLE_ACTIVITY_START_INDEX + this.workoutNames.indexOf(name)
+  }
+
+  private async loadReports(): Promise<void> {
+    if (this.reportsLoading) return
+    this.reportsLoading = true
+    try {
+      this.reports = await RwBleSdk.getSportResult()
+      this.showToast(this.reports.length > 0 ? `已加载 ${this.reports.length} 条报告` : '设备暂无新报告')
+    } catch (error) {
+      this.showToast(`报告加载失败: ${JSON.stringify(error)}`)
+    } finally {
+      this.reportsLoading = false
+    }
+  }
+
+  private dateText(timestamp: number): string {
+    if (timestamp <= 0) return '--'
+    return new Date(timestamp * 1000).toLocaleString()
   }
 
   private async refreshSportStatus(): Promise<void> {

@@ -14,6 +14,7 @@ struct WorkoutRunningPage {
   @State private heartText: string = '0 bpm'
   @State private statusText: string = '运动中'
   @State private syncingResult: boolean = false
+  @State private connected: boolean = false
 
   private readonly workoutNames: string[] = [
     '跑步', '跑步机', '户外跑步', '骑行', '游泳', '健走', '登山', '瑜伽', '动感单车', '篮球',
@@ -37,6 +38,7 @@ struct WorkoutRunningPage {
   private controlUnsub: (() => void) | null = null
 
   aboutToAppear(): void {
+    this.connected = RwBleSdk.isBleConnected()
     this.loadParams()
     this.updateWorkoutTitle()
     this.updateStatusText()
@@ -55,54 +57,73 @@ struct WorkoutRunningPage {
 
   build() {
     Scroll() {
-      Column({ space: 14 }) {
-        Row() {
-          Button('← 返回').type(ButtonType.Normal)
+      Column({ space: 0 }) {
+        Row({ space: 10 }) {
+          Text('‹').fontSize(34).fontColor('#26312C').width(38)
             .onClick(() => { try { this.getUIContext().getRouter().back() } catch (_e) {} })
-          Text('Real-time sports data')
-            .fontSize(22)
-            .fontWeight(FontWeight.Bold)
-            .margin({ left: 12 })
-            .layoutWeight(1)
+          Text('实时运动数据').fontSize(25).fontWeight(FontWeight.Bold).fontColor('#18221E')
         }
         .width('100%')
+        .margin({ top: 10, bottom: 20 })
 
-        Column({ space: 8 }) {
-          Text(`Type: ${this.workoutName}`)
-            .fontSize(20)
-            .fontWeight(FontWeight.Medium)
-            .width('100%')
-          Text(this.statusText)
-            .fontSize(13)
-            .fontColor('#687076')
-            .width('100%')
+        Column({ space: 0 }) {
+          Row() {
+            Column({ space: 5 }) {
+              Text('当前运动').fontSize(12).fontColor('#B8D0C6')
+              Text(this.workoutName).fontSize(25).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+            Text(this.statusText).fontSize(12).fontColor('#FFFFFF')
+              .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+              .backgroundColor('#2FFFFFFF').borderRadius(16)
+          }
+          .width('100%')
+          Text(this.timeText).fontSize(44).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
+            .letterSpacing(3).textAlign(TextAlign.Center).width('100%').margin({ top: 30 })
+          Text('运动时长').fontSize(11).fontColor('#B8D0C6').textAlign(TextAlign.Center).width('100%').margin({ top: 4 })
         }
-        .sectionStyle()
+        .alignItems(HorizontalAlign.Start)
+        .width('100%')
+        .padding({ left: 22, right: 22, top: 22, bottom: 28 })
+        .backgroundColor(this.controlType === WorkoutControlType.Workout_Pause ? '#8A6B2D' : '#164B3A')
+        .borderRadius(24)
+        .shadow({ radius: 18, color: '#280C674B', offsetY: 8 })
 
-        Column({ space: 10 }) {
-          this.MetricRow('Time', this.timeText)
-          this.MetricRow('Steps', this.stepText)
-          this.MetricRow('Distance', this.distanceText)
-          this.MetricRow('Calories', this.caloriesText)
-          this.MetricRow('HeartRate', this.heartText)
+        if (!this.connected) {
+          Text('蓝牙已断开。设备上的运动不会自动结束，重新连接后可继续控制。')
+            .fontSize(12).fontColor('#98651E').lineHeight(19).width('100%')
+            .padding(14).backgroundColor('#FFF2DF').borderRadius(16).margin({ top: 16 })
         }
-        .sectionStyle()
 
-        Row({ space: 8 }) {
-          Button('结束')
-            .enabled(this.showEndButton())
-            .onClick(() => this.finishWorkout())
-            .layoutWeight(1)
-          Button('暂停')
-            .enabled(this.showPauseButton())
-            .onClick(() => this.pauseWorkout())
-            .layoutWeight(1)
-          Button('继续')
-            .enabled(this.showContinueButton())
-            .onClick(() => this.continueWorkout())
-            .layoutWeight(1)
+        Grid() {
+          GridItem() { this.MetricCard(this.stepText, '步数 · 步', false) }
+          GridItem() { this.MetricCard(this.distanceText.replace(' Km', ''), '距离 · km', false) }
+          GridItem() { this.MetricCard(this.caloriesText.replace(' KCal', ''), '热量 · kcal', false) }
+          GridItem() { this.MetricCard(this.heartText.replace(' bpm', ''), '心率 · bpm', true) }
+        }
+        .columnsTemplate('1fr 1fr')
+        .columnsGap(12)
+        .rowsGap(12)
+        .width('100%')
+        .margin({ top: 18 })
+
+        Row({ space: 12 }) {
+          if (this.showPauseButton()) {
+            Button('暂停').fontSize(15).fontColor('#FFFFFF').backgroundColor('#D39A34').borderRadius(24)
+              .enabled(this.connected).layoutWeight(1).onClick(() => this.pauseWorkout())
+          }
+          if (this.showContinueButton()) {
+            Button('继续').fontSize(15).fontColor('#FFFFFF').backgroundColor('#0C9B6C').borderRadius(24)
+              .enabled(this.connected).layoutWeight(1).onClick(() => this.continueWorkout())
+          }
+          if (this.showEndButton()) {
+            Button('结束运动').fontSize(15).fontColor('#FFFFFF').backgroundColor('#D85B5B').borderRadius(24)
+              .enabled(this.connected).layoutWeight(1).onClick(() => this.finishWorkout())
+          }
         }
         .width('100%')
+        .margin({ top: 22 })
 
         if (this.syncingResult) {
           Row({ space: 8 }) {
@@ -111,28 +132,40 @@ struct WorkoutRunningPage {
           }
           .width('100%')
           .justifyContent(FlexAlign.Center)
+          .margin({ top: 16 })
         }
+
+        Column({ space: 8 }) {
+          Text('运动说明').fontSize(15).fontWeight(FontWeight.Bold).fontColor('#405149').width('100%')
+          Text('离开此页面只会关闭实时数据通知，不会结束设备上的运动。运动超过 2 分钟后正常结束，设备才会保存运动报告。')
+            .fontSize(12).fontColor('#77847E').lineHeight(20).width('100%')
+        }
+        .alignItems(HorizontalAlign.Start)
+        .width('100%')
+        .padding(18)
+        .backgroundColor('#EEF5F1')
+        .borderRadius(20)
+        .margin({ top: 22, bottom: 28 })
       }
-      .padding(16)
+      .padding({ left: 18, right: 18 })
       .width('100%')
     }
     .height('100%')
+    .backgroundColor('#F4F7F5')
   }
 
   @Builder
-  private MetricRow(label: string, value: string) {
-    Row() {
-      Text(label)
-        .fontSize(14)
-        .fontColor('#687076')
-        .layoutWeight(1)
-      Text(value)
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#111827')
+  private MetricCard(value: string, label: string, heart: boolean) {
+    Column({ space: 6 }) {
+      Text(value).fontSize(25).fontWeight(FontWeight.Bold).fontColor(heart ? '#D05A5A' : '#18221E')
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+      Text(label).fontSize(12).fontColor('#8B9690').width('100%')
     }
+    .alignItems(HorizontalAlign.Start)
     .width('100%')
-    .height(36)
+    .padding(18)
+    .backgroundColor('#FFFFFF')
+    .borderRadius(20)
   }
 
   private loadParams(): void {

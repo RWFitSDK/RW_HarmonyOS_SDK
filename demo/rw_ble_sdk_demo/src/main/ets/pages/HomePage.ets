@@ -2,78 +2,129 @@ import { common } from '@kit.AbilityKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { promptAction } from '@kit.ArkUI';
 import { fileUri } from '@kit.CoreFileKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { systemShare } from '@kit.ShareKit';
 import fs from '@ohos.file.fs';
 import zlib from '@ohos.zlib';
-import { DrinkReminderBean, FirmVersionBean, HealthDataSyncBean, PowerBean, RwBleDevice, RwBleSdk, SupportMenuBean } from 'rw_ble_sdk';
+import {
+  FirmVersionBean,
+  BloodOxySyncBean,
+  BloodPressSyncBean,
+  BloodSugarSyncBean,
+  BodyTempSyncBean,
+  DevicePushType,
+  HeartRateSyncBean,
+  HrvSyncBean,
+  MuslimCountSyncBean,
+  PowerBean,
+  PressureSyncBean,
+  PushData,
+  RwBleDevice,
+  RwBleSdk,
+  SleepSyncBean,
+  StepSyncBean,
+  SupportMenuBean
+} from 'rw_ble_sdk';
 import { SavedDeviceStore } from '../model/SavedDeviceStore';
+import { DeviceSettingService } from '../model/DeviceSettingService';
 
-// Demo 不内置固件。测试 OTA 前，请配置为应用可访问的固件文件路径。
-const OTA_FILE_PATH = ''
+interface HealthDisplayRecord {
+  value: string
+  summary: string
+  time: string
+  timestamp: number
+}
 
 @Entry
 @Component
 struct HomePage {
+  @State private selectedTab: number = 0
   @State private connected: boolean = false
+  @State private connecting: boolean = false
   @State private deviceName: string = '未连接'
   @State private sdkVersion: string = ''
-  @State private savedDeviceText: string = '无保存设备'
-  @State private logText: string = ''
   @State private savedDevice: RwBleDevice | null = null
-  @State private hrMeasuring: boolean = false
-  @State private connecting: boolean = false
   @State private menu: SupportMenuBean | null = null
-  @State private otaRunning: boolean = false
-  @State private otaProgress: number = 0
+  @State private powerText: string = '--'
+  @State private modelText: string = '--'
+  @State private firmwareText: string = '--'
+  @State private healthRefreshing: boolean = false
+  @State private healthSyncing: boolean = false
+  @State private healthSyncProgress: number = 0
+  @State private lastSyncText: string = '下拉同步全部健康数据'
+  @State private stepsText: string = '暂无数据'
+  @State private sleepText: string = '暂无数据'
+  @State private heartRateText: string = '暂无数据'
+  @State private bloodOxygenText: string = '暂无数据'
+  @State private bloodPressureText: string = '暂无数据'
+  @State private hrvText: string = '暂无数据'
+  @State private pressureText: string = '暂无数据'
+  @State private bloodSugarText: string = '暂无数据'
+  @State private temperatureText: string = '暂无数据'
+  @State private muslimCountText: string = '暂无数据'
+
+  private initialized: boolean = false
+  private pushUnsub: (() => void) | null = null
+  private powerRequest: Promise<PowerBean> | null = null
+  private syncedStepDays: Array<StepSyncBean> = []
+  private stepsRecords: Array<HealthDisplayRecord> = []
+  private sleepRecords: Array<HealthDisplayRecord> = []
+  private heartRateRecords: Array<HealthDisplayRecord> = []
+  private bloodOxygenRecords: Array<HealthDisplayRecord> = []
+  private bloodPressureRecords: Array<HealthDisplayRecord> = []
+  private hrvRecords: Array<HealthDisplayRecord> = []
+  private pressureRecords: Array<HealthDisplayRecord> = []
+  private bloodSugarRecords: Array<HealthDisplayRecord> = []
+  private temperatureRecords: Array<HealthDisplayRecord> = []
+  private muslimCountRecords: Array<HealthDisplayRecord> = []
 
   private context(): common.Context {
     return this.getUIContext().getHostContext() as common.Context
   }
-  private realtimeUnsub: (() => void) | null = null
 
   aboutToAppear(): void {
+    this.subscribeDevicePush()
     this.initPage()
   }
 
   onPageShow(): void {
-    this.loadSavedDevice()
+    this.refreshPageState()
+  }
+
+  aboutToDisappear(): void {
+    this.pushUnsub?.()
+    this.pushUnsub = null
   }
 
   private async initPage(): Promise<void> {
+    if (this.initialized) return
+    this.initialized = true
     await this.loadSavedDevice()
     RwBleSdk.setConnectBleCallback({
       onRingConnecting: () => {
         this.connecting = true
-        this.addLog('连接中...')
+        this.deviceName = this.savedDevice?.name ?? '正在连接'
       },
       onRingConnected: () => {
         this.connected = true
-        this.deviceName = this.savedDevice?.name ?? '设备'
-        this.addLog('链路已连接，等待功能表')
+        this.deviceName = this.savedDevice?.name ?? 'RW 智能戒指'
       },
       onRingConnectFailed: (reason: string) => {
         this.connecting = false
         this.connected = false
-        this.deviceName = '连接失败'
-        this.addLog(`连接失败: ${reason}`)
         this.showToast(`连接失败: ${reason}`)
       },
-      onRingDisconnected: (reason: string) => {
+      onRingDisconnected: (_reason: string) => {
         this.connecting = false
         this.connected = false
-        this.deviceName = '已断开'
-        this.hrMeasuring = false
         this.menu = null
-        this.addLog(`已断开: ${reason}`)
+        this.deviceName = this.savedDevice?.name ?? '已断开'
         this.showToast('设备已断开')
       },
       onRingDidFunctionMenu: async (menuBean: SupportMenuBean) => {
         this.connecting = false
-        this.menu = menuBean
         this.connected = true
-        this.deviceName = menuBean.name ?? this.savedDevice?.name ?? '设备'
-        this.showToast('连接成功')
+        this.menu = menuBean
+        this.deviceName = menuBean.name ?? this.savedDevice?.name ?? 'RW 智能戒指'
         if (this.savedDevice) {
           const updated: RwBleDevice = {
             deviceId: this.savedDevice.deviceId,
@@ -86,68 +137,52 @@ struct HomePage {
           }
           await SavedDeviceStore.save(this.context(), updated)
           this.savedDevice = updated
-          this.refreshSavedText()
         }
-        this.addLog('设备就绪')
+        this.showToast('连接成功')
+        this.refreshDeviceInfo()
       }
     })
     RwBleSdk.initSDK(this.context())
     this.sdkVersion = RwBleSdk.getSDKVersion()
+    this.refreshPageState()
+  }
+
+  private async refreshPageState(): Promise<void> {
+    await this.loadSavedDevice()
+    this.connected = RwBleSdk.isBleConnected()
+    this.menu = RwBleSdk.getSupportMenu()
+    if (this.savedDevice) this.deviceName = this.savedDevice.name ?? 'RW 智能戒指'
+    if (this.connected) this.refreshDeviceInfo()
   }
 
   build() {
     Stack() {
-      Scroll() {
-        Column({ space: 14 }) {
-          Row({ space: 12 }) {
-            Text('RW BLE Demo')
-              .fontSize(28)
-              .fontWeight(FontWeight.Bold)
-              .layoutWeight(1)
-            Button('分享日志')
-              .type(ButtonType.Normal)
-              .onClick(() => this.shareLogs())
+      Column() {
+        if (this.selectedTab === 0) {
+          Refresh({ refreshing: $$this.healthRefreshing, promptText: this.healthSyncing ? '正在同步健康数据' : '下拉同步健康数据' }) {
+            Scroll() { this.HomeContent() }.width('100%').height('100%')
           }
+          .onRefreshing(() => this.syncAllHealth())
+          .layoutWeight(1)
           .width('100%')
-
-          // 设备状态栏
-          Column({ space: 6 }) {
-            Text(this.deviceName).fontSize(20).fontWeight(FontWeight.Medium)
-            Text(this.sdkVersion).fontSize(12).fontColor('#687076')
-            Text(this.connected ? '已连接' : '未连接')
-              .fontSize(14)
-              .fontColor(this.connected ? '#087443' : '#9A3412')
-          }
-          .alignItems(HorizontalAlign.Start)
-          .width('100%')
-          .padding(14)
-          .backgroundColor('#F6F8FA')
-          .borderRadius(8)
-
-          this.ConnectionSection()
-          this.DeviceInfoSection()
-          this.OtaSection()
-          this.RealtimeHealthSection()
-          this.TimedHealthSection()
-          this.HealthSyncSection()
-          this.NavSection()
-          this.LogSection()
+        } else {
+          Scroll() { this.DeviceContent() }.layoutWeight(1).width('100%')
         }
-        .padding(16)
-        .width('100%')
+        this.BottomBar()
       }
+      .width('100%')
       .height('100%')
+      .backgroundColor('#F4F7F5')
 
-      // Loading overlay
       if (this.connecting) {
-        Column() {
-          LoadingProgress().width(48).height(48).color('#FFFFFF')
-          Text('连接中...').fontSize(14).fontColor('#FFFFFF').margin({ top: 8 })
+        Column({ space: 12 }) {
+          LoadingProgress().width(50).height(50).color('#FFFFFF')
+          Text('正在连接设备').fontSize(15).fontColor('#FFFFFF')
         }
         .justifyContent(FlexAlign.Center)
         .width('100%')
         .height('100%')
-        .backgroundColor('#80000000')
+        .backgroundColor('#8A000000')
       }
     }
     .width('100%')
@@ -155,513 +190,723 @@ struct HomePage {
   }
 
   @Builder
-  private ConnectionSection() {
-    Column({ space: 10 }) {
-      Text('连接管理').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-      Text(this.savedDeviceText).fontSize(13).fontColor('#687076').width('100%')
-      if (this.savedDevice) {
-        Text(`MAC: ${this.savedDevice.mac ?? '-'}  deviceId: ${this.savedDevice.deviceId}`)
-          .fontSize(11).fontColor('#9CA3AF').width('100%')
-      }
-      Row({ space: 8 }) {
-        Button(this.savedDevice ? '重新搜索' : '搜索设备')
-          .onClick(() => this.goScan())
-          .layoutWeight(1)
-        Button('重连设备')
-          .enabled(!!this.savedDevice && !this.connected && !this.connecting)
-          .onClick(() => this.reconnect())
-          .layoutWeight(1)
-        Button('解绑')
-          .type(ButtonType.Normal)
-          .enabled(!!this.savedDevice)
-          .onClick(() => this.unbindAndSearch())
-          .layoutWeight(1)
-      }
-      .width('100%')
-    }
-    .sectionStyle()
-  }
-
-  @Builder
-  private DeviceInfoSection() {
-    Column({ space: 10 }) {
-      Text('设备信息').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-      Row({ space: 8 }) {
-        Button('电量')
-          .enabled(this.connected)
-          .onClick(() => this.getPower())
-          .layoutWeight(1)
-        Button('固件版本')
-          .enabled(this.connected)
-          .onClick(() => this.getFirmware())
-          .layoutWeight(1)
-        Button('MAC地址')
-          .enabled(this.connected)
-          .onClick(() => this.getMac())
-          .layoutWeight(1)
-      }
-      .width('100%')
-    }
-    .sectionStyle()
-  }
-
-  @Builder
-  private OtaSection() {
-    Column({ space: 10 }) {
-      Text('OTA升级测试').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-      Text(OTA_FILE_PATH ? `固件路径: ${OTA_FILE_PATH}` : '请先在 Demo 中配置 OTA_FILE_PATH')
-        .fontSize(11)
-        .fontColor('#687076')
-        .width('100%')
-      Text('升级过程中请保持设备连接和电量充足，勿退出应用。')
-        .fontSize(12)
-        .fontColor('#B45309')
-        .width('100%')
-      Text(`进度: ${this.otaProgress}%`)
-        .fontSize(13)
-        .width('100%')
-      Button(this.otaRunning ? 'OTA升级中...' : 'OTA升级')
-        .enabled(this.connected && !this.otaRunning)
-        .onClick(() => this.startOta())
-        .width('100%')
-    }
-    .sectionStyle()
-  }
-
-  @Builder
-  private RealtimeHealthSection() {
-    Column({ space: 10 }) {
-      Text('实时检测').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-      Row({ space: 8 }) {
-        Button(this.hrMeasuring ? '停止心率' : '心率')
-          .enabled(this.connected && this.menu?.isHr === true)
-          .onClick(() => this.toggleRealtimeHr())
-          .layoutWeight(1)
-        Button('血氧')
-          .enabled(this.connected && this.menu?.isBloodOxy === true)
-          .onClick(() => this.startRealtimeBo())
-          .layoutWeight(1)
-        Button('HRV')
-          .enabled(this.connected && this.menu?.isHrv === true)
-          .onClick(() => this.startRealtimeHrv())
-          .layoutWeight(1)
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        Button('压力')
-          .enabled(this.connected && this.menu?.isPressure === true)
-          .onClick(() => this.startRealtimeStress())
-          .layoutWeight(1)
-        Button('血糖')
-          .enabled(this.connected && this.menu?.isBloodSugar === true)
-          .onClick(() => this.startRealtimeBloodSugar())
-          .layoutWeight(1)
-        Button('体温')
-          .enabled(this.connected && this.menu?.isDataTypeTemperature === true)
-          .onClick(() => this.startRealtimeTemp())
-          .layoutWeight(1)
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        Button('血压')
-          .enabled(this.connected && this.menu?.isBloodPress === true)
-          .onClick(() => this.startRealtimeBp())
-          .layoutWeight(1)
-      }
-      .width('100%')
-    }
-    .sectionStyle()
-  }
-
-  @Builder
-  private TimedHealthSection() {
-    Column({ space: 10 }) {
-      Text('定时检测').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-      Row({ space: 8 }) {
-        Button('获取心率')
-          .enabled(this.connected && this.menu?.isHr === true)
-          .onClick(() => this.getTimedHr())
-          .layoutWeight(1)
-        Button('设心率60分')
-          .enabled(this.connected && this.menu?.isHr === true)
-          .onClick(() => this.setTimedHr())
-          .layoutWeight(1)
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        Button('获取血氧')
-          .enabled(this.connected && this.menu?.isBloodOxy === true)
-          .onClick(() => this.getTimedBo())
-          .layoutWeight(1)
-        Button('设血氧开')
-          .enabled(this.connected && this.menu?.isBloodOxy === true)
-          .onClick(() => this.setTimedBo())
-          .layoutWeight(1)
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        Button('获取HRV')
-          .enabled(this.connected && this.menu?.isHrv === true)
-          .onClick(() => this.getTimedHrv())
-          .layoutWeight(1)
-        Button('设HRV开')
-          .enabled(this.connected && this.menu?.isHrv === true)
-          .onClick(() => this.setTimedHrv())
-          .layoutWeight(1)
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        Button('获取压力')
-          .enabled(this.connected && this.menu?.isPressure === true)
-          .onClick(() => this.getTimedStress())
-          .layoutWeight(1)
-        Button('设压力开')
-          .enabled(this.connected && this.menu?.isPressure === true)
-          .onClick(() => this.setTimedStress())
-          .layoutWeight(1)
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        Button('获取血糖')
-          .enabled(this.connected && this.menu?.isBloodSugar === true)
-          .onClick(() => this.getTimedBloodSugar())
-          .layoutWeight(1)
-        Button('设血糖开')
-          .enabled(this.connected && this.menu?.isBloodSugar === true)
-          .onClick(() => this.setTimedBloodSugar())
-          .layoutWeight(1)
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        Button('获取血压')
-          .enabled(this.connected && this.menu?.isBloodPress === true)
-          .onClick(() => this.getTimedBp())
-          .layoutWeight(1)
-        Button('设血压开')
-          .enabled(this.connected && this.menu?.isBloodPress === true)
-          .onClick(() => this.setTimedBp())
-          .layoutWeight(1)
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        Button('获取体温')
-          .enabled(this.connected && this.menu?.isDataTypeTemperature === true)
-          .onClick(() => this.getTimedTemp())
-          .layoutWeight(1)
-        Button('设体温开')
-          .enabled(this.connected && this.menu?.isDataTypeTemperature === true)
-          .onClick(() => this.setTimedTemp())
-          .layoutWeight(1)
-      }
-      .width('100%')
-    }
-    .sectionStyle()
-  }
-
-  @Builder
-  private HealthSyncSection() {
-    Column({ space: 10 }) {
-      Text('健康数据同步').fontSize(18).fontWeight(FontWeight.Medium).width('100%')
-      Button('同步全部健康数据')
-        .enabled(this.connected)
-        .onClick(() => this.syncAllHealth())
-        .width('100%')
-    }
-    .sectionStyle()
-  }
-
-  @Builder
-  private NavSection() {
-    Column({ space: 10 }) {
-      Button('设置页（闹钟/震动/亮屏/LED等）')
-        .enabled(this.connected)
-        .onClick(() => this.goSettings())
-        .width('100%')
-      Button('运动页（Workout）')
-        .enabled(this.connected && this.menu?.isNewSport !== false)
-        .onClick(() => this.goWorkout())
-        .width('100%')
-    }
-    .sectionStyle()
-  }
-
-  @Builder
-  private LogSection() {
-    Column({ space: 10 }) {
-      Row({ space: 8 }) {
-        Text('日志').fontSize(18).fontWeight(FontWeight.Medium).layoutWeight(1)
-        Button('清空').type(ButtonType.Normal).onClick(() => this.logText = '')
-      }
-      Text(this.logText || '暂无日志')
-        .fontSize(12)
-        .fontColor('#444B53')
-        .width('100%')
-        .height(200)
-    }
-    .sectionStyle()
-  }
-
-  // ─── 实时检测 ──────────────────────────────────────────────────────
-
-  private toggleRealtimeHr(): void {
-    if (this.hrMeasuring) {
-      this.realtimeUnsub?.()
-      this.realtimeUnsub = null
-      RwBleSdk.controlHealthData(0x03, 0) // HR off
-      this.hrMeasuring = false
-      this.addLog('心率检测已停止')
-    } else {
-      // Subscribe to realtime data
-      const dataUnsub = RwBleSdk.onHealthRealtimeData((data: HealthDataSyncBean) => {
-        this.addLog(this.formatRealtimeHealth(data))
-      })
-      // Subscribe to measurement complete event
-      const ctrlUnsub = RwBleSdk.onHealthControlEvent((data: Object) => {
-        const d = data as Record<string, number>
-        if (d.healthType === 0x03 && d.status === 0) {
-          this.hrMeasuring = false
-          this.addLog('心率检测完成')
-          dataUnsub()
-          ctrlUnsub()
-          this.realtimeUnsub = null
+  private HomeContent() {
+    Column({ space: 0 }) {
+      Row() {
+        Column({ space: 5 }) {
+          Text('今天感觉怎么样？').fontSize(28).fontWeight(FontWeight.Bold).fontColor('#18221E')
+          Text('连接戒指，查看你的健康趋势').fontSize(14).fontColor('#87928D')
         }
-      })
-      this.realtimeUnsub = () => { dataUnsub(); ctrlUnsub() }
-      RwBleSdk.controlHealthData(0x03, 1) // HR on
-      this.hrMeasuring = true
-      this.addLog('心率检测已启动')
-    }
-  }
-
-  private startRealtimeBo(): void {
-    this.startHealthMeasure(0x09, '血氧')
-  }
-
-  private startRealtimeHrv(): void {
-    this.startHealthMeasure(0x0A, 'HRV')
-  }
-
-  private startRealtimeStress(): void {
-    this.startHealthMeasure(0x0D, '压力')
-  }
-
-  private startRealtimeBloodSugar(): void {
-    this.startHealthMeasure(0x10, '血糖')
-  }
-
-  private startRealtimeTemp(): void {
-    this.startHealthMeasure(0x08, '体温')
-  }
-
-  private startRealtimeBp(): void {
-    this.startHealthMeasure(0x04, '血压')
-  }
-
-  /** 通用启动健康检测：订阅实时数据 + 测量完成自动通知 */
-  private startHealthMeasure(type: number, name: string): void {
-    const dataUnsub = RwBleSdk.onHealthRealtimeData((data: HealthDataSyncBean) => {
-      this.addLog(this.formatRealtimeHealth(data))
-    })
-    const ctrlUnsub = RwBleSdk.onHealthControlEvent((data: Object) => {
-      const d = data as Record<string, number>
-      if (d.healthType === type && d.status === 0) {
-        this.addLog(`${name}检测完成`)
-        dataUnsub()
-        ctrlUnsub()
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        Text('RW')
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#0C9468')
+          .width(48)
+          .height(48)
+          .textAlign(TextAlign.Center)
+          .backgroundColor('#E1F3EB')
+          .borderRadius(16)
       }
-    })
-    RwBleSdk.controlHealthData(type, 1)
-    this.addLog(`${name}检测已启动`)
+      .width('100%')
+      .margin({ top: 12, bottom: 22 })
+
+      if (this.savedDevice) {
+        this.DeviceCard(true)
+      } else {
+        this.UnboundCard()
+      }
+
+      Row() {
+        Text('健康数据').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#1C2823')
+        Blank()
+        Text(this.healthSyncing ? `同步中 ${this.healthSyncProgress}%` : this.lastSyncText)
+          .fontSize(12).fontColor(this.healthSyncing ? '#0C9468' : '#8A948F').margin({ left: 10 })
+      }
+      .width('100%')
+      .margin({ top: 28, bottom: 14 })
+
+      if (this.healthSyncing) {
+        Progress({ value: this.healthSyncProgress, total: 100, type: ProgressType.Linear })
+          .color('#0C9B6C')
+          .backgroundColor('#DFE9E4')
+          .width('100%')
+          .height(5)
+          .margin({ bottom: 14 })
+      }
+
+      if (this.savedDevice && this.hasHealthCards()) {
+        Grid() {
+          if (this.menu?.isStep === true) {
+            GridItem() { this.HealthCard('步', '计步', 'steps', '点击查看详情', () => this.goHealthDetail('steps', '计步', this.stepsText, 0, this.stepsRecords)) }
+          }
+          if (this.menu?.isSleep === true) {
+            GridItem() { this.HealthCard('眠', '睡眠', 'sleep', '点击查看详情', () => this.goHealthDetail('sleep', '睡眠', this.sleepText, 0, this.sleepRecords)) }
+          }
+          if (this.menu?.isHr === true) {
+            GridItem() { this.HealthCard('心', '心率', 'heartRate', '点击查看详情', () => this.goHealthDetail('heartRate', '心率', this.heartRateText, 0x03, this.heartRateRecords)) }
+          }
+          if (this.menu?.isBloodOxy === true) {
+            GridItem() { this.HealthCard('氧', '血氧', 'bloodOxygen', '点击查看详情', () => this.goHealthDetail('bloodOxygen', '血氧', this.bloodOxygenText, 0x09, this.bloodOxygenRecords)) }
+          }
+          if (this.menu?.isBloodPress === true) {
+            GridItem() { this.HealthCard('压', '血压', 'bloodPressure', '点击查看详情', () => this.goHealthDetail('bloodPressure', '血压', this.bloodPressureText, 0x04, this.bloodPressureRecords)) }
+          }
+          if (this.menu?.isHrv === true) {
+            GridItem() { this.HealthCard('HRV', 'HRV', 'hrv', '点击查看详情', () => this.goHealthDetail('hrv', 'HRV', this.hrvText, 0x0A, this.hrvRecords)) }
+          }
+          if (this.menu?.isPressure === true) {
+            GridItem() { this.HealthCard('力', '压力', 'stress', '点击查看详情', () => this.goHealthDetail('stress', '压力', this.pressureText, 0x0D, this.pressureRecords)) }
+          }
+          if (this.menu?.isBloodSugar === true) {
+            GridItem() { this.HealthCard('糖', '血糖', 'bloodSugar', '点击查看详情', () => this.goHealthDetail('bloodSugar', '血糖', this.bloodSugarText, 0x10, this.bloodSugarRecords)) }
+          }
+          if (this.menu?.isDataTypeTemperature === true) {
+            GridItem() { this.HealthCard('温', '体温', 'temperature', '点击查看详情', () => this.goHealthDetail('temperature', '体温', this.temperatureText, 0x08, this.temperatureRecords)) }
+          }
+          if (this.menu?.isMuslimCountData === true) {
+            GridItem() { this.HealthCard('念', '赞念', 'muslimCount', '点击查看详情', () => this.goHealthDetail('muslimCount', '赞念', this.muslimCountText, 0, this.muslimCountRecords)) }
+          }
+          if (this.menu?.isNewSport === true) {
+            GridItem() { this.HealthCard('动', '多运动', 'workout', '选择运动或加载报告', () => this.goWorkout()) }
+          }
+        }
+        .columnsTemplate('1fr 1fr')
+        .columnsGap(12)
+        .rowsGap(12)
+        .width('100%')
+      } else if (this.savedDevice) {
+        this.EmptyCard('暂未获得健康能力', '请重新连接设备，获取功能配置表。', '重新连接', () => this.reconnect())
+      } else {
+        this.EmptyCard('绑定后显示健康数据', '首页会根据设备功能表展示计步、心率、睡眠、多运动等支持项目。', '添加设备', () => this.goScan())
+      }
+    }
+    .alignItems(HorizontalAlign.Start)
+    .width('100%')
+    .padding({ left: 18, right: 18, bottom: 30 })
   }
 
-  private formatRealtimeHealth(data: HealthDataSyncBean): string {
-    switch (data.dataType) {
-      case 1:
-        return `心率: ${data.hrValue ?? data.value ?? 0} bpm`
-      case 3:
-        return `血氧: ${data.boValue ?? data.value ?? 0}%`
-      case 4:
-        return `血压: ${data.bpSp ?? 0}/${data.bpDp ?? 0} mmHg`
-      case 8:
-        return `压力: ${data.pressureValue ?? data.value ?? 0}`
-      case 9:
-        return `血糖: ${data.bloodSugarValue ?? data.value ?? 0}`
-      case 10:
-        return `赞念: ${data.muslimCount ?? data.value ?? 0}`
-      case 11:
-        return `体温: ${data.temperature ?? ((data.tempValue ?? data.value ?? 0) / 10)}℃`
-      case 13:
-        return `HRV: ${data.hrvValue ?? data.value ?? 0}`
-      case 20:
-        return `步数: ${data.steps ?? data.value ?? 0}, 卡路里: ${data.calorie ?? 0}, 距离: ${data.distance ?? 0}`
-      default:
-        return `实时数据: ${JSON.stringify(data)}`
+  @Builder
+  private DeviceContent() {
+    Column({ space: 0 }) {
+      Text('我的设备').fontSize(28).fontWeight(FontWeight.Bold).fontColor('#18221E').width('100%')
+        .margin({ top: 14 })
+      Text('管理连接、设备信息与支持功能').fontSize(14).fontColor('#87928D').width('100%')
+        .margin({ top: 6, bottom: 22 })
+
+      if (this.savedDevice) {
+        this.DeviceCard(false)
+        Row({ space: 10 }) {
+          Button(this.connected ? '断开连接' : '重新连接')
+            .fontSize(14)
+            .fontColor(this.connected ? '#087E59' : '#FFFFFF')
+            .backgroundColor(this.connected ? '#E4F2EC' : '#0C9B6C')
+            .borderRadius(22)
+            .layoutWeight(1)
+            .onClick(() => this.connected ? this.disconnect() : this.reconnect())
+          Button('解除绑定')
+            .fontSize(14)
+            .fontColor('#C64B4B')
+            .backgroundColor('#FFF0F0')
+            .borderRadius(22)
+            .layoutWeight(1)
+            .onClick(() => this.unbind())
+        }
+        .width('100%')
+        .margin({ top: 14 })
+
+        this.SectionTitle('设备信息', '')
+        Column() {
+          this.PowerInfoRow()
+          this.DividerLine()
+          this.InfoRow('设备型号', '', this.modelText, () => {})
+          this.DividerLine()
+          this.InfoRow('固件版本', '', this.firmwareText, () => {})
+          this.DividerLine()
+          this.DeviceIdentifierRow('MAC', this.savedDevice?.mac ?? '未从广播获取')
+          this.DividerLine()
+          this.DeviceIdentifierRow('deviceId', this.savedDevice?.deviceId ?? '未获取')
+          this.DividerLine()
+          this.InfoRow('固件升级', '选择厂家提供的 .bin 文件', this.connected ? '可操作' : '需连接', () => this.goFirmwareUpgrade())
+        }
+        .cardStyle()
+
+        this.SectionTitle('设备功能', '按功能表显示')
+        if (this.hasDeviceSettings()) {
+          Column() {
+            if (this.menu?.isAlarm === true) this.SupportedFeatureRow('alarm', '闹', '闹钟', '设备闹钟管理')
+            if (this.menu?.isDND === true) this.SupportedFeatureRow('dnd', '勿', '勿扰模式', '设置勿扰开关与时段')
+            if (this.menu?.isBrightScreenSleepTime === true) this.SupportedFeatureRow('screenSleep', '屏', '屏幕睡眠', '设置屏幕睡眠时段')
+            if (this.menu?.isBrightScreenTime === true) this.SupportedFeatureRow('brightDuration', '亮', '亮屏时长', '设置屏幕保持点亮时间')
+            if (this.menu?.isRaiseBrightScreen === true) this.SupportedFeatureRow('raiseToWake', '抬', '抬腕亮屏', '设置开关与生效时段')
+            if (this.menu?.isLEDLight === true) this.SupportedFeatureRow('ledLevel', '灯', 'LED 亮度', '设置 LED 开关与亮度')
+            if (this.menu?.isWearDir === true) this.SupportedFeatureRow('wearHand', '戴', '佩戴位置', '左手或右手佩戴')
+            if (this.menu?.isFindDevice === true) {
+              this.FeatureRow('找', '查找设备', '让戒指发出查找提示', '立即执行', () => this.findDevice())
+              this.DividerLine()
+            }
+            if (this.menu?.isTakePhoto === true) this.SupportedFeatureRow('takePhoto', '拍', '遥控拍照', '接收戒指拍照事件')
+            if (this.menu?.isHr === true) this.SupportedFeatureRow('heartRateMonitoring', '心', '全天心率', '设置全天监测开关与间隔')
+            if (this.menu?.isBloodOxy === true) this.SupportedFeatureRow('bloodOxygenMonitoring', '氧', '全天血氧', '设置全天血氧监测')
+            if (this.menu?.isHrv === true) this.SupportedFeatureRow('hrvMonitoring', '变', '全天 HRV', '设置全天 HRV 监测')
+            if (this.menu?.isPressure === true) this.SupportedFeatureRow('stressMonitoring', '压', '全天压力', '设置全天压力监测')
+            if (this.menu?.isBloodPress === true) this.SupportedFeatureRow('bloodPressureMonitoring', '血', '全天血压', '设置全天血压监测')
+            if (this.menu?.isBloodSugar === true) this.SupportedFeatureRow('bloodSugarMonitoring', '糖', '全天血糖', '设置全天血糖监测')
+            if (this.menu?.isSupportTemperatureMonitoring === true || this.menu?.isDataTypeTemperature === true) {
+              this.SupportedFeatureRow('temperatureMonitoring', '温', '全天体温', '设置全天体温监测')
+            }
+            if (this.menu?.isSupportPPGMonitoring === true) this.SupportedFeatureRow('ppgMonitoring', 'P', 'PPG 定时监测', '设置 PPG 定时监测')
+            if (this.menu?.isSupportHrReminder === true) this.SupportedFeatureRow('heartRateAlert', '警', '心率报警', '设置心率上下限')
+            if (this.menu?.isSupportBoReminder === true) this.SupportedFeatureRow('bloodOxygenAlert', '警', '血氧报警', '设置血氧下限')
+            if (this.menu?.isSupportMotoVibrationLevel === true) this.SupportedFeatureRow('vibrationCount', '震', '震动次数', '设置提醒震动次数')
+            if (this.menu?.isSupportAlarmVibrationDuration === true) this.SupportedFeatureRow('alarmVibration', '震', '闹钟震动时长', '设置闹钟震动参数')
+            if (this.menu?.isSupportVibrationInterval === true) this.SupportedFeatureRow('vibrationInterval', '隔', '震动间隔', '设置每次震动的间隔')
+            if (this.menu?.isSupportCountReminder === true) this.SupportedFeatureRow('countReminder', '提', '计数提醒', '设置计数提醒间隔')
+            if (this.menu?.isSupportFallDetect === true) this.SupportedFeatureRow('fallDetect', '落', '跌落提醒', '开启或关闭跌落检测')
+            if (this.menu?.isRememberSwitch === true) this.SupportedFeatureRow('rememberSwitch', '念', '赞念开关', '开启或关闭赞念功能')
+            if (this.menu?.isSupportMuslimTimeDisplayMode === true) this.SupportedFeatureRow('muslimTimeMode', '时', '赞念时间显示', '设置时间显示模式')
+            if (this.menu?.isPowerOff === true || this.menu?.isRecovery === true) {
+              this.FeatureRow('电', '关机与恢复出厂', '设备电源操作', '立即执行', () => this.openPowerMenu())
+              this.DividerLine()
+            }
+          }
+          .cardStyle()
+        } else {
+          this.EmptyCard('暂无可配置功能', '设备功能表未声明可配置项，重新连接后可再次获取。', '重新连接', () => this.reconnect())
+        }
+
+        this.SectionTitle('其他操作', '')
+        Column() {
+          this.FeatureRow('志', '分享 SDK 日志', '导出压缩日志用于问题排查', '', () => this.shareLogs())
+        }.cardStyle()
+      } else {
+        this.UnboundCard()
+        this.EmptyCard('还没有绑定戒指', '绑定后这里会根据功能配置表展示设备支持的全部设置。', '搜索设备', () => this.goScan())
+      }
+
+      Text(`SDK ${this.sdkVersion}`)
+        .fontSize(11)
+        .fontColor('#A0AAA5')
+        .textAlign(TextAlign.Center)
+        .width('100%')
+        .margin({ top: 28, bottom: 24 })
+    }
+    .alignItems(HorizontalAlign.Start)
+    .width('100%')
+    .padding({ left: 18, right: 18 })
+  }
+
+  @Builder
+  private DeviceCard(selectable: boolean) {
+    Row({ space: 14 }) {
+      Stack() {
+        Circle().width(56).height(56).fill('#D8E6E0')
+        Circle().width(25).height(25).fill('#164B3A')
+      }
+      .width(58)
+      .height(58)
+      Column({ space: 6 }) {
+        Row({ space: 8 }) {
+          Text(this.deviceName).fontSize(18).fontWeight(FontWeight.Bold).fontColor('#FFFFFF').maxLines(1).layoutWeight(1)
+          Text(this.connecting ? '连接中' : this.connected ? '已连接' : '未连接')
+            .fontSize(11)
+            .fontColor(this.connected ? '#BCFFE0' : '#DCE8E3')
+            .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+            .backgroundColor('#2FFFFFFF')
+            .borderRadius(12)
+        }
+        .width('100%')
+        Text(`MAC：${this.savedDevice?.mac ?? '连接后获取'}`).fontSize(11).fontColor('#D0E1DA').maxLines(1)
+        Text(`deviceId：${this.savedDevice?.deviceId ?? '-'}`).fontSize(10).fontColor('#AAC3B9').maxLines(1)
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Text(selectable ? '›' : this.powerText === '--' ? '' : `电量 ${this.powerText}`)
+        .fontSize(selectable ? 28 : 11)
+        .fontColor('#D7E8E1')
+    }
+    .width('100%')
+    .padding(18)
+    .backgroundColor('#164B3A')
+    .borderRadius(22)
+    .shadow({ radius: 18, color: '#260C674B', offsetY: 8 })
+    .onClick(() => { if (selectable) this.selectedTab = 1 })
+  }
+
+  @Builder
+  private UnboundCard() {
+    Row({ space: 14 }) {
+      Text('+').fontSize(30).fontColor('#0C9B6C').textAlign(TextAlign.Center)
+        .width(52).height(52).backgroundColor('#E2F3EC').borderRadius(26)
+      Column({ space: 5 }) {
+        Text('未绑定设备').fontSize(18).fontWeight(FontWeight.Bold).fontColor('#1C2823')
+        Text('点击搜索并连接 RW 智能戒指').fontSize(13).fontColor('#8A958F')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Text('›').fontSize(30).fontColor('#AEB9B4')
+    }
+    .width('100%')
+    .padding(18)
+    .backgroundColor('#F9FBFA')
+    .border({ width: 1, color: '#B9C8C1', style: BorderStyle.Dashed })
+    .borderRadius(22)
+    .onClick(() => this.goScan())
+  }
+
+  @Builder
+  private HealthCard(symbol: string, title: string, type: string, subtitle: string, action: () => void) {
+    Column({ space: 0 }) {
+      Row() {
+        Text(symbol).fontSize(symbol.length > 1 ? 10 : 13).fontWeight(FontWeight.Bold).fontColor('#0B9467')
+          .textAlign(TextAlign.Center).width(38).height(38).backgroundColor('#E7F5EF').borderRadius(12)
+        Text('›').fontSize(24).fontColor('#BDC5C1').layoutWeight(1).textAlign(TextAlign.End)
+      }
+      .width('100%')
+      Text(title).fontSize(14).fontColor('#53605A').margin({ top: 13 }).width('100%')
+      Text(this.healthValueText(type)).fontSize(20).fontWeight(FontWeight.Bold).fontColor('#18221E').maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%').margin({ top: 5 })
+      Text(subtitle).fontSize(10).fontColor('#9AA39F').maxLines(1).width('100%').margin({ top: 5 })
+    }
+    .alignItems(HorizontalAlign.Start)
+    .width('100%')
+    .height(156)
+    .padding(16)
+    .backgroundColor('#FFFFFF')
+    .borderRadius(20)
+    .shadow({ radius: 12, color: '#12253C2D', offsetY: 4 })
+    .onClick(action)
+  }
+
+  private healthValueText(type: string): string {
+    switch (type) {
+      case 'steps': return this.stepsText
+      case 'sleep': return this.sleepText
+      case 'heartRate': return this.heartRateText
+      case 'bloodOxygen': return this.bloodOxygenText
+      case 'bloodPressure': return this.bloodPressureText
+      case 'hrv': return this.hrvText
+      case 'stress': return this.pressureText
+      case 'bloodSugar': return this.bloodSugarText
+      case 'temperature': return this.temperatureText
+      case 'muslimCount': return this.muslimCountText
+      case 'workout': return '查看运动'
+      default: return '暂无数据'
     }
   }
 
-  // ─── 定时检测 ──────────────────────────────────────────────────────
-
-  private async getTimedHr(): Promise<void> {
-    try {
-      const res = await RwBleSdk.getTimedHeartRate()
-      this.addLog(`定时心率: ${JSON.stringify(res)}`)
-    } catch (e) { this.addLog(`获取失败: ${JSON.stringify(e)}`) }
+  @Builder
+  private EmptyCard(title: string, text: string, buttonText: string, action: () => void) {
+    Column({ space: 10 }) {
+      Text(title).fontSize(18).fontWeight(FontWeight.Bold).fontColor('#1C2823')
+      Text(text).fontSize(13).fontColor('#909A95').textAlign(TextAlign.Center).lineHeight(20)
+      Button(buttonText).fontSize(14).fontColor('#FFFFFF').backgroundColor('#0C9B6C').borderRadius(22)
+        .margin({ top: 8 }).onClick(action)
+    }
+    .justifyContent(FlexAlign.Center)
+    .width('100%')
+    .padding({ top: 38, bottom: 38, left: 24, right: 24 })
+    .backgroundColor('#FFFFFF')
+    .borderRadius(22)
+    .margin({ top: 12 })
   }
 
-  private async setTimedHr(): Promise<void> {
-    try {
-      const bean: DrinkReminderBean = { isOpen: true, remindDuration: 60, startHour: 0, startMin: 0, endHour: 23, endMin: 59 }
-      await RwBleSdk.setTimedHeartRate(bean)
-      this.addLog('定时心率设置成功 (开/60分)')
-    } catch (e) { this.addLog(`设置失败: ${JSON.stringify(e)}`) }
+  @Builder
+  private SectionTitle(title: string, caption: string) {
+    Row({ space: 8 }) {
+      Text(title).fontSize(19).fontWeight(FontWeight.Bold).fontColor('#1C2823')
+      if (caption.length > 0) Text(caption).fontSize(12).fontColor('#8A948F')
+    }
+    .width('100%')
+    .margin({ top: 28, bottom: 13 })
   }
 
-  private async getTimedBo(): Promise<void> {
-    try {
-      const res = await RwBleSdk.getTimedBloodOxygen()
-      this.addLog(`定时血氧: ${JSON.stringify(res)}`)
-    } catch (e) { this.addLog(`获取失败: ${JSON.stringify(e)}`) }
+  @Builder
+  private InfoRow(title: string, subtitle: string, value: string, action: () => void) {
+    Row({ space: 12 }) {
+      Column({ space: 4 }) {
+        Text(title).fontSize(16).fontColor('#1C2823')
+        if (subtitle.length > 0) Text(subtitle).fontSize(12).fontColor('#929C97')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Text(value).fontSize(13).fontColor(title === '固件升级' ? '#0C9568' : '#66716C').maxLines(1)
+      if (title === '设备电量' || title === '固件升级') Text('›').fontSize(24).fontColor('#BDC5C1')
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 15, bottom: 15 })
+    .onClick(action)
   }
 
-  private async setTimedBo(): Promise<void> {
-    try {
-      const bean: DrinkReminderBean = { isOpen: true, remindDuration: 60, startHour: 0, startMin: 0, endHour: 23, endMin: 59 }
-      await RwBleSdk.setTimedBloodOxygen(bean)
-      this.addLog('定时血氧设置成功')
-    } catch (e) { this.addLog(`设置失败: ${JSON.stringify(e)}`) }
+  @Builder
+  private PowerInfoRow() {
+    Row({ space: 12 }) {
+      Column({ space: 4 }) {
+        Text('设备电量').fontSize(16).fontColor('#1C2823')
+        Text('点击刷新').fontSize(12).fontColor('#929C97')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      Text(this.powerText).fontSize(13).fontColor('#66716C').maxLines(1)
+      Text('›').fontSize(24).fontColor('#BDC5C1')
+    }
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 15, bottom: 15 })
+    .onClick(() => this.refreshPower(true))
   }
 
-  private async getTimedHrv(): Promise<void> {
-    try {
-      const res = await RwBleSdk.getTimedHRV()
-      this.addLog(`定时HRV: ${JSON.stringify(res)}`)
-    } catch (e) { this.addLog(`获取失败: ${JSON.stringify(e)}`) }
+  @Builder
+  private DeviceIdentifierRow(title: string, value: string) {
+    Column({ space: 6 }) {
+      Text(title).fontSize(14).fontColor('#59665F').width('100%')
+      Text(value).fontSize(12).fontColor('#26312C').width('100%').maxLines(2)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .alignItems(HorizontalAlign.Start)
+    .width('100%')
+    .padding({ left: 18, right: 18, top: 13, bottom: 13 })
   }
 
-  private async setTimedHrv(): Promise<void> {
-    try {
-      const bean: DrinkReminderBean = { isOpen: true, remindDuration: 60, startHour: 0, startMin: 0, endHour: 23, endMin: 59 }
-      await RwBleSdk.setTimedHRV(bean)
-      this.addLog('定时HRV设置成功')
-    } catch (e) { this.addLog(`设置失败: ${JSON.stringify(e)}`) }
+  @Builder
+  private FeatureRow(symbol: string, title: string, subtitle: string, value: string, action: () => void) {
+    Row({ space: 13 }) {
+      Text(symbol).fontSize(13).fontWeight(FontWeight.Bold).fontColor('#168662')
+        .textAlign(TextAlign.Center).width(40).height(40).backgroundColor('#EDF6F2').borderRadius(12)
+      Column({ space: 4 }) {
+        Text(title).fontSize(16).fontColor('#1C2823')
+        Text(subtitle).fontSize(12).fontColor('#929C97')
+      }
+      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      if (value.length > 0) Text(value).fontSize(12).fontColor('#0C9568')
+      Text('›').fontSize(24).fontColor('#BDC5C1')
+    }
+    .width('100%')
+    .padding({ left: 16, right: 18, top: 14, bottom: 14 })
+    .onClick(action)
   }
 
-  private async getTimedStress(): Promise<void> {
-    try {
-      const res = await RwBleSdk.getTimedStress()
-      this.addLog(`定时压力: ${JSON.stringify(res)}`)
-    } catch (e) { this.addLog(`获取失败: ${JSON.stringify(e)}`) }
+  @Builder
+  private SupportedFeatureRow(id: string, symbol: string, title: string, subtitle: string) {
+    this.FeatureRow(symbol, title, subtitle, DeviceSettingService.canGet(id) ? '设置 / 获取' : '点击设置',
+      () => this.openFeatureMenu(id, title))
+    this.DividerLine()
   }
 
-  private async setTimedStress(): Promise<void> {
-    try {
-      const bean: DrinkReminderBean = { isOpen: true, remindDuration: 60, startHour: 0, startMin: 0, endHour: 23, endMin: 59 }
-      await RwBleSdk.setTimedStress(bean)
-      this.addLog('定时压力设置成功')
-    } catch (e) { this.addLog(`设置失败: ${JSON.stringify(e)}`) }
+  @Builder
+  private DividerLine() {
+    Divider().strokeWidth(1).color('#EDF0EE').margin({ left: 18, right: 18 })
   }
 
-  private async getTimedBloodSugar(): Promise<void> {
-    try {
-      const res = await RwBleSdk.getTimedBloodSugar()
-      this.addLog(`定时血糖: ${JSON.stringify(res)}`)
-    } catch (e) { this.addLog(`获取失败: ${JSON.stringify(e)}`) }
+  @Builder
+  private BottomBar() {
+    Row() {
+      Column({ space: 3 }) {
+        Text('⌂').fontSize(22).fontColor(this.selectedTab === 0 ? '#0C9B6C' : '#8A948F')
+        Text('首页').fontSize(11).fontColor(this.selectedTab === 0 ? '#0C9B6C' : '#8A948F')
+      }
+      .justifyContent(FlexAlign.Center)
+      .layoutWeight(1)
+      .height('100%')
+      .onClick(() => this.selectedTab = 0)
+      Column({ space: 3 }) {
+        Text('◉').fontSize(20).fontColor(this.selectedTab === 1 ? '#0C9B6C' : '#8A948F')
+        Text('设备').fontSize(11).fontColor(this.selectedTab === 1 ? '#0C9B6C' : '#8A948F')
+      }
+      .justifyContent(FlexAlign.Center)
+      .layoutWeight(1)
+      .height('100%')
+      .onClick(() => this.selectedTab = 1)
+    }
+    .width('100%')
+    .height(64)
+    .backgroundColor('#FFFFFF')
+    .border({ width: { top: 1 }, color: '#EDF0EE' })
   }
 
-  private async setTimedBloodSugar(): Promise<void> {
-    try {
-      const bean: DrinkReminderBean = { isOpen: true, remindDuration: 60, startHour: 0, startMin: 0, endHour: 23, endMin: 59 }
-      await RwBleSdk.setTimedBloodSugar(bean)
-      this.addLog('定时血糖设置成功')
-    } catch (e) { this.addLog(`设置失败: ${JSON.stringify(e)}`) }
+  private hasHealthCards(): boolean {
+    const m = this.menu
+    if (!m) return false
+    return m.isStep === true || m.isSleep === true || m.isHr === true || m.isBloodOxy === true ||
+      m.isBloodPress === true || m.isHrv === true || m.isPressure === true || m.isBloodSugar === true ||
+      m.isDataTypeTemperature === true || m.isMuslimCountData === true || m.isNewSport === true
   }
 
-  private async getTimedBp(): Promise<void> {
-    try {
-      const res = await RwBleSdk.getTimedBloodPressure()
-      this.addLog(`定时血压: ${JSON.stringify(res)}`)
-    } catch (e) { this.addLog(`获取失败: ${JSON.stringify(e)}`) }
+  private hasDeviceSettings(): boolean {
+    const m = this.menu
+    if (!m) return false
+    return m.isAlarm === true || m.isDND === true || m.isBrightScreenTime === true ||
+      m.isBrightScreenSleepTime === true || m.isRaiseBrightScreen === true || m.isLEDLight === true ||
+      m.isWearDir === true || m.isVideoHid === true || m.isFindDevice === true || m.isRecovery === true ||
+      m.isPowerOff === true || m.isSupportMotoVibrationLevel === true || m.isSupportHrReminder === true ||
+      m.isSupportBoReminder === true || m.isHr === true || m.isBloodOxy === true || m.isHrv === true ||
+      m.isPressure === true || m.isBloodPress === true || m.isBloodSugar === true ||
+      m.isSupportTemperatureMonitoring === true || m.isSupportPPGMonitoring === true ||
+      m.isSupportAlarmVibrationDuration === true || m.isSupportVibrationInterval === true ||
+      m.isSupportFallDetect === true || m.isSupportCountReminder === true || m.isRememberSwitch === true ||
+      m.isTakePhoto === true || m.isSupportMuslimTimeDisplayMode === true
   }
-
-  private async setTimedBp(): Promise<void> {
-    try {
-      const bean: DrinkReminderBean = { isOpen: true, remindDuration: 60, startHour: 0, startMin: 0, endHour: 23, endMin: 59 }
-      await RwBleSdk.setTimedBloodPressure(bean)
-      this.addLog('定时血压设置成功')
-    } catch (e) { this.addLog(`设置失败: ${JSON.stringify(e)}`) }
-  }
-
-  private async getTimedTemp(): Promise<void> {
-    try {
-      const res = await RwBleSdk.getTimedBodyTemperature()
-      this.addLog(`定时体温: ${JSON.stringify(res)}`)
-    } catch (e) { this.addLog(`获取失败: ${JSON.stringify(e)}`) }
-  }
-
-  private async setTimedTemp(): Promise<void> {
-    try {
-      const bean: DrinkReminderBean = { isOpen: true, remindDuration: 60, startHour: 0, startMin: 0, endHour: 23, endMin: 59 }
-      await RwBleSdk.setTimedBodyTemperature(bean)
-      this.addLog('定时体温设置成功')
-    } catch (e) { this.addLog(`设置失败: ${JSON.stringify(e)}`) }
-  }
-
-  // ─── 健康同步 ──────────────────────────────────────────────────────
 
   private syncAllHealth(): void {
+    if (!this.connected || this.healthSyncing) {
+      if (!this.connected) this.showToast('请先连接设备')
+      if (!this.healthSyncing) this.healthRefreshing = false
+      return
+    }
+    this.healthRefreshing = true
+    this.healthSyncing = true
+    this.healthSyncProgress = 0
+    this.lastSyncText = '正在同步健康数据'
+    this.syncedStepDays = []
     RwBleSdk.syncAllHealthData({
-      onSyncProgress: (p: number) => this.addLog(`同步进度 ${p}%`),
-      onSyncStep: (data: Array<Object>) => this.addLog(`步数: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncSleep: (data: Array<Object>) => this.addLog(`睡眠: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncHr: (data: Array<Object>) => this.addLog(`心率: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncBo: (data: Array<Object>) => this.addLog(`血氧: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncBp: (data: Array<Object>) => this.addLog(`血压: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncHrv: (data: Array<Object>) => this.addLog(`HRV: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncPressure: (data: Array<Object>) => this.addLog(`压力: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncBloodSugar: (data: Array<Object>) => this.addLog(`血糖: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncTemp: (data: Array<Object>) => this.addLog(`体温: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncMuslimCount: (data: Array<Object>) => this.addLog(`赞念: ${data.length}条 ${JSON.stringify(data).substring(0, 200)}`),
-      onSyncFinish: () => this.addLog('同步完成'),
-      onSyncError: (code: number) => this.addLog(`同步失败 code=${code}`)
+      onSyncProgress: (progress: number) => this.healthSyncProgress = progress,
+      onSyncStep: (data: Array<StepSyncBean>) => this.receiveSteps(data),
+      onSyncSleep: (data: Array<SleepSyncBean>) => this.receiveSleep(data),
+      onSyncHr: (data: Array<HeartRateSyncBean>) => this.receiveHeartRate(data),
+      onSyncBo: (data: Array<BloodOxySyncBean>) => this.receiveBloodOxygen(data),
+      onSyncBp: (data: Array<BloodPressSyncBean>) => this.receiveBloodPressure(data),
+      onSyncHrv: (data: Array<HrvSyncBean>) => this.receiveHrv(data),
+      onSyncPressure: (data: Array<PressureSyncBean>) => this.receivePressure(data),
+      onSyncBloodSugar: (data: Array<BloodSugarSyncBean>) => this.receiveBloodSugar(data),
+      onSyncTemp: (data: Array<BodyTempSyncBean>) => this.receiveTemperature(data),
+      onSyncMuslimCount: (data: Array<MuslimCountSyncBean>) => this.receiveMuslimCount(data),
+      onSyncFinish: () => {
+        this.healthRefreshing = false
+        this.healthSyncing = false
+        this.healthSyncProgress = 100
+        this.lastSyncText = '刚刚同步'
+        this.showToast('同步完成')
+      },
+      onSyncError: (code: number) => {
+        this.healthRefreshing = false
+        this.healthSyncing = false
+        this.lastSyncText = '同步失败，请下拉重试'
+        this.showToast(`同步失败: ${code}`)
+      }
     })
   }
 
-  // ─── 连接管理 ──────────────────────────────────────────────────────
+  private receiveSteps(data: Array<StepSyncBean>): void {
+    for (const incoming of data) {
+      const index = this.syncedStepDays.findIndex((saved: StepSyncBean) => saved.date === incoming.date)
+      if (index < 0) {
+        this.syncedStepDays.push(incoming)
+      } else if (incoming.timestamp >= this.syncedStepDays[index].timestamp) {
+        this.syncedStepDays[index] = incoming
+      }
+    }
+    const days = this.syncedStepDays.slice()
+      .sort((first: StepSyncBean, second: StepSyncBean) => second.timestamp - first.timestamp)
+    const today = this.localDateText(new Date())
+    const currentDay = days.find((day: StepSyncBean) => day.date === today)
+    const homeDay = currentDay ?? (days.length > 0 ? days[0] : null)
+    this.stepsText = homeDay ? `${homeDay.totalSteps} 步` : '暂无数据'
+    const records: Array<HealthDisplayRecord> = []
+    for (const day of days) {
+      if (day.date === today) {
+        records.push({
+          value: `${day.totalSteps} 步`,
+          summary: `今日累计步数 · 热量 ${day.totalCalorie} kcal`,
+          time: this.formatRecordTime(day.timestamp),
+          timestamp: day.timestamp
+        })
+      }
+      if (day.items.length === 0) {
+        if (day.date !== today) {
+          records.push({
+            value: `${day.totalSteps} 步`,
+            summary: `当日累计 · 热量 ${day.totalCalorie} kcal`,
+            time: day.date,
+            timestamp: day.timestamp
+          })
+        }
+        continue
+      }
+      for (const item of day.items) {
+        records.push({
+          value: `${item.steps} 步`,
+          summary: `热量 ${item.calorie} kcal · 距离 ${item.distance}`,
+          time: this.formatRecordTime(item.timestamp),
+          timestamp: item.timestamp
+        })
+      }
+    }
+    this.stepsRecords = this.sortRecords(records)
+  }
+
+  private receiveSleep(data: Array<SleepSyncBean>): void {
+    const sessions = data.slice().sort((first: SleepSyncBean, second: SleepSyncBean) =>
+      (second.awakeTime || second.timestamp) - (first.awakeTime || first.timestamp))
+    this.sleepText = sessions.length > 0 ? this.formatSleepDuration(sessions[0].totalSleepTime) : '暂无数据'
+    const records: Array<HealthDisplayRecord> = []
+    for (const session of sessions) {
+      if (session.items.length === 0) {
+        records.push({
+          value: this.formatSleepDuration(session.totalSleepTime),
+          summary: '睡眠记录',
+          time: this.formatRecordTime(session.asleepTime || session.timestamp),
+          timestamp: session.asleepTime || session.timestamp
+        })
+        continue
+      }
+      let stageTime = session.asleepTime
+      for (const item of session.items) {
+        records.push({
+          value: this.sleepTypeText(item.sleepType),
+          summary: `${item.len} 分钟${item.isTemporary ? ' · 临时数据' : ''}`,
+          time: this.formatRecordTime(stageTime),
+          timestamp: stageTime
+        })
+        stageTime += item.len * 60
+      }
+    }
+    this.sleepRecords = this.sortRecords(records)
+  }
+
+  private receiveHeartRate(data: Array<HeartRateSyncBean>): void {
+    const records: Array<HealthDisplayRecord> = []
+    for (const day of data) {
+      for (const item of day.items) {
+        records.push({ value: `${item.hr} bpm`, summary: '心率', time: this.formatRecordTime(item.timestamp), timestamp: item.timestamp })
+      }
+    }
+    this.heartRateRecords = this.sortRecords(records)
+    this.heartRateText = this.latestValue(this.heartRateRecords)
+  }
+
+  private receiveBloodOxygen(data: Array<BloodOxySyncBean>): void {
+    const records: Array<HealthDisplayRecord> = []
+    for (const day of data) {
+      for (const item of day.items) {
+        records.push({ value: `${item.bloodOxy}%`, summary: '血氧', time: this.formatRecordTime(item.timestamp), timestamp: item.timestamp })
+      }
+    }
+    this.bloodOxygenRecords = this.sortRecords(records)
+    this.bloodOxygenText = this.latestValue(this.bloodOxygenRecords)
+  }
+
+  private receiveBloodPressure(data: Array<BloodPressSyncBean>): void {
+    const records: Array<HealthDisplayRecord> = []
+    for (const day of data) {
+      for (const item of day.items) {
+        records.push({ value: `${item.sp}/${item.dp} mmHg`, summary: '收缩压 / 舒张压', time: this.formatRecordTime(item.timestamp), timestamp: item.timestamp })
+      }
+    }
+    this.bloodPressureRecords = this.sortRecords(records)
+    this.bloodPressureText = this.latestValue(this.bloodPressureRecords)
+  }
+
+  private receiveHrv(data: Array<HrvSyncBean>): void {
+    const records: Array<HealthDisplayRecord> = []
+    for (const day of data) {
+      for (const item of day.items) {
+        records.push({ value: `${item.hrv} ms`, summary: 'HRV', time: this.formatRecordTime(item.timestamp), timestamp: item.timestamp })
+      }
+    }
+    this.hrvRecords = this.sortRecords(records)
+    this.hrvText = this.latestValue(this.hrvRecords)
+  }
+
+  private receivePressure(data: Array<PressureSyncBean>): void {
+    const records: Array<HealthDisplayRecord> = []
+    for (const day of data) {
+      for (const item of day.items) {
+        records.push({ value: `${item.pressure}`, summary: '压力', time: this.formatRecordTime(item.timestamp), timestamp: item.timestamp })
+      }
+    }
+    this.pressureRecords = this.sortRecords(records)
+    this.pressureText = this.latestValue(this.pressureRecords)
+  }
+
+  private receiveBloodSugar(data: Array<BloodSugarSyncBean>): void {
+    const records: Array<HealthDisplayRecord> = []
+    for (const day of data) {
+      for (const item of day.items) {
+        records.push({ value: `${item.sugar} mmol/L`, summary: '血糖', time: this.formatRecordTime(item.timestamp), timestamp: item.timestamp })
+      }
+    }
+    this.bloodSugarRecords = this.sortRecords(records)
+    this.bloodSugarText = this.latestValue(this.bloodSugarRecords)
+  }
+
+  private receiveTemperature(data: Array<BodyTempSyncBean>): void {
+    const records: Array<HealthDisplayRecord> = []
+    for (const day of data) {
+      for (const item of day.items) {
+        records.push({ value: `${item.temperature} ℃`, summary: '体温', time: this.formatRecordTime(item.timestamp), timestamp: item.timestamp })
+      }
+    }
+    this.temperatureRecords = this.sortRecords(records)
+    this.temperatureText = this.latestValue(this.temperatureRecords)
+  }
+
+  private receiveMuslimCount(data: Array<MuslimCountSyncBean>): void {
+    const records: Array<HealthDisplayRecord> = []
+    for (const day of data) {
+      for (const item of day.items) {
+        records.push({ value: `${item.count} 次`, summary: '赞念计数', time: this.formatRecordTime(item.timestamp), timestamp: item.timestamp })
+      }
+    }
+    this.muslimCountRecords = this.sortRecords(records)
+    this.muslimCountText = this.latestValue(this.muslimCountRecords)
+  }
+
+  private sortRecords(records: Array<HealthDisplayRecord>): Array<HealthDisplayRecord> {
+    return records.sort((first: HealthDisplayRecord, second: HealthDisplayRecord) => second.timestamp - first.timestamp)
+  }
+
+  private latestValue(records: Array<HealthDisplayRecord>): string {
+    return records.length > 0 ? records[0].value : '暂无数据'
+  }
+
+  private formatRecordTime(timestamp: number): string {
+    if (timestamp <= 0) return '--'
+    const value = new Date(timestamp * 1000)
+    return `${this.twoDigits(value.getMonth() + 1)}-${this.twoDigits(value.getDate())} ` +
+      `${this.twoDigits(value.getHours())}:${this.twoDigits(value.getMinutes())}`
+  }
+
+  private twoDigits(value: number): string {
+    return value < 10 ? `0${value}` : `${value}`
+  }
+
+  private localDateText(value: Date): string {
+    return `${value.getFullYear()}-${this.twoDigits(value.getMonth() + 1)}-${this.twoDigits(value.getDate())}`
+  }
+
+  private formatSleepDuration(minutes: number): string {
+    const hour = Math.floor(minutes / 60)
+    const minute = minutes % 60
+    return hour > 0 ? `${hour}小时${minute}分钟` : `${minute}分钟`
+  }
+
+  private sleepTypeText(type: number): string {
+    switch (type) {
+      case 1: return '浅睡'
+      case 2: return '深睡'
+      case 3: return 'REM'
+      default: return '清醒'
+    }
+  }
 
   private async loadSavedDevice(): Promise<void> {
     this.savedDevice = await SavedDeviceStore.load(this.context())
-    this.refreshSavedText()
-  }
-
-  private refreshSavedText(): void {
-    if (!this.savedDevice) {
-      this.savedDeviceText = '无保存设备'
-      return
-    }
-    this.savedDeviceText = `${this.savedDevice.name ?? '未命名'} (${this.savedDevice.deviceId})`
   }
 
   private async goScan(): Promise<void> {
-    // Match the Android demo: searching again means replacing the bound device,
-    // so discard both the live connection and the persisted device first.
     RwBleSdk.stopScan()
-    RwBleSdk.disconnect()
-    await SavedDeviceStore.clear(this.context())
-    this.savedDevice = null
-    this.menu = null
-    this.connected = false
-    this.connecting = false
-    this.deviceName = '未连接'
-    this.refreshSavedText()
     try { this.getUIContext().getRouter().pushUrl({ url: 'pages/ScanPage' }) } catch (_e) {}
   }
 
-  private goSettings(): void {
-    try { this.getUIContext().getRouter().pushUrl({ url: 'pages/SetPage' }) } catch (_e) {}
-  }
-
-  private goWorkout(): void {
-    try { this.getUIContext().getRouter().pushUrl({ url: 'pages/WorkoutTypePage' }) } catch (_e) {}
+  private goHealthDetail(type: string, title: string, value: string, measurementCode: number,
+    records: Array<HealthDisplayRecord>): void {
+    try {
+      this.getUIContext().getRouter().pushUrl({
+        url: 'pages/HealthDetailPage',
+        params: { type, title, value, measurementCode, records }
+      })
+    } catch (_e) {}
   }
 
   private reconnect(): void {
@@ -669,8 +914,6 @@ struct HomePage {
     if (!saved || this.connecting) return
     let matched = false
     this.connecting = true
-    this.deviceName = '正在搜索设备'
-    this.addLog(`搜索已保存设备: ${saved.mac ?? saved.deviceId}`)
     RwBleSdk.startScan({
       onScanDevice: (device: RwBleDevice) => {
         if (matched || !this.matchesSavedDevice(device, saved)) return
@@ -681,38 +924,26 @@ struct HomePage {
       onScanFinish: () => {
         if (matched) return
         this.connecting = false
-        this.deviceName = '未发现设备'
-        this.addLog('重连扫描超时，未发现已保存设备')
         this.showToast('未发现已保存设备，请确认设备在附近')
       },
       onError: (_code: number, error: Error) => {
         if (matched) return
         this.connecting = false
-        this.deviceName = '扫描失败'
-        this.addLog(`重连扫描失败: ${error.message}`)
-        this.showToast('扫描失败，请检查蓝牙权限')
+        this.showToast(`扫描失败: ${error.message}`)
       }
     })
   }
 
   private matchesSavedDevice(device: RwBleDevice, saved: RwBleDevice): boolean {
-    const deviceMac = this.normalizeDeviceAddress(device.mac)
-    const savedMac = this.normalizeDeviceAddress(saved.mac)
-    if (deviceMac && savedMac) return deviceMac === savedMac
-
-    // Compatibility fallback for records created before manufacturer MAC
-    // parsing was available.
-    const currentIds: Array<string> = [device.deviceId, device.uuid ?? '', device.mac ?? '']
-      .map((value: string) => this.normalizeDeviceAddress(value))
-      .filter((value: string) => value.length > 0)
-    const savedIds: Array<string> = [saved.deviceId, saved.uuid ?? '', saved.mac ?? '']
-      .map((value: string) => this.normalizeDeviceAddress(value))
-      .filter((value: string) => value.length > 0)
+    const currentIds: Array<string> = [device.mac ?? '', device.uuid ?? '', device.deviceId]
+      .map((value: string) => this.normalizeDeviceAddress(value)).filter((value: string) => value.length > 0)
+    const savedIds: Array<string> = [saved.mac ?? '', saved.uuid ?? '', saved.deviceId]
+      .map((value: string) => this.normalizeDeviceAddress(value)).filter((value: string) => value.length > 0)
     return currentIds.some((value: string) => savedIds.includes(value))
   }
 
-  private normalizeDeviceAddress(value?: string): string {
-    return (value ?? '').replace(/[:-]/g, '').toUpperCase()
+  private normalizeDeviceAddress(value: string): string {
+    return value.replace(/[:-]/g, '').toUpperCase()
   }
 
   private async connectScannedDevice(saved: RwBleDevice, scanned: RwBleDevice): Promise<void> {
@@ -727,72 +958,182 @@ struct HomePage {
     }
     await SavedDeviceStore.save(this.context(), refreshed)
     this.savedDevice = refreshed
-    this.refreshSavedText()
-    this.addLog(`已找到保存设备: mac=${refreshed.mac ?? '-'} deviceId=${refreshed.deviceId}`)
     RwBleSdk.reconnectDevice(refreshed)
   }
 
-  private async unbindAndSearch(): Promise<void> {
-    await this.goScan()
+  private disconnect(): void {
+    RwBleSdk.disconnect()
+    this.connected = false
   }
 
-  private async getPower(): Promise<void> {
+  private async unbind(): Promise<void> {
+    RwBleSdk.disconnect()
+    await SavedDeviceStore.clear(this.context())
+    this.savedDevice = null
+    this.menu = null
+    this.connected = false
+    this.deviceName = '未连接'
+    this.powerText = '--'
+    this.modelText = '--'
+    this.firmwareText = '--'
+  }
+
+  private async refreshDeviceInfo(): Promise<void> {
+    await this.refreshPower()
     try {
-      const res: PowerBean = await RwBleSdk.getPower()
-      this.addLog(`电量: ${res.power}%`)
-    } catch (e) { this.addLog(`获取电量失败: ${JSON.stringify(e)}`) }
+      const result: FirmVersionBean = await RwBleSdk.getFirmwareVersion()
+      this.modelText = result.deviceClazz ?? '--'
+      this.firmwareText = result.deviceNo ?? '--'
+    } catch (_e) {}
   }
 
-  private async getFirmware(): Promise<void> {
-    try {
-      const res: FirmVersionBean = await RwBleSdk.getFirmwareVersion()
-      this.addLog(`型号:${res.deviceClazz ?? '-'} 固件:${res.deviceNo} UI:${res.uiVersion ?? '-'} 屏幕:${res.screenWidth}x${res.screenHeight}`)
-    } catch (e) { this.addLog(`获取固件失败: ${JSON.stringify(e)}`) }
-  }
-
-  private async getMac(): Promise<void> {
-    try {
-      const mac = await RwBleSdk.getMacAddress()
-      this.addLog(`MAC地址: ${mac}`)
-    } catch (e) { this.addLog(`获取MAC失败: ${JSON.stringify(e)}`) }
-  }
-
-  private startOta(): void {
-    if (!this.connected || this.otaRunning) return
-    if (!OTA_FILE_PATH) {
-      this.addLog('OTA未启动: 请先配置OTA_FILE_PATH')
-      this.showToast('请先配置OTA固件路径')
+  private async refreshPower(showResult: boolean = false): Promise<void> {
+    if (!this.connected) {
+      if (showResult) this.showToast('请先连接设备')
       return
     }
-    this.otaRunning = true
-    this.otaProgress = 0
-    this.addLog(`开始OTA: ${OTA_FILE_PATH}`)
-    RwBleSdk.ringOtaWithFileData(OTA_FILE_PATH, {
-      onProgress: (progress: number) => {
-        const percent = Math.min(100, Math.max(0, Math.floor(progress * 100)))
-        if (percent === this.otaProgress) return
-        this.otaProgress = percent
-        if (percent % 10 === 0 || percent === 100) this.addLog(`OTA进度: ${percent}%`)
-      },
-      onSuccess: () => {
-        this.otaProgress = 100
-        this.otaRunning = false
-        this.addLog('OTA升级完成')
-        this.showToast('OTA升级完成')
-      },
-      onError: (code: number) => {
-        this.otaRunning = false
-        this.addLog(`OTA升级失败: code=${code}`)
-        this.showToast(`OTA升级失败: ${code}`)
+    const request = this.powerRequest ?? RwBleSdk.getPower()
+    this.powerRequest = request
+    try {
+      const result: PowerBean = await request
+      this.powerText = `${result.power}%`
+      if (showResult) this.showToast('电量已更新')
+    } catch (error) {
+      this.showToast(`电量获取失败: ${error instanceof Error ? error.message : JSON.stringify(error)}`)
+    } finally {
+      if (this.powerRequest === request) this.powerRequest = null
+    }
+  }
+
+  private subscribeDevicePush(): void {
+    if (this.pushUnsub) return
+    this.pushUnsub = RwBleSdk.subscribePush((data: PushData) => {
+      if (data.type !== DevicePushType.POWER) return
+      const power = data.value as PowerBean
+      this.powerText = `${power.power}%`
+    })
+  }
+
+  private findDevice(): void {
+    if (!this.connected) { this.showToast('请先连接设备'); return }
+    RwBleSdk.controlFindDevice()
+    this.showToast('查找指令已发送')
+  }
+
+  private async openFeatureMenu(id: string, title: string): Promise<void> {
+    if (!this.connected) { this.showToast('请先连接设备'); return }
+    if (!DeviceSettingService.canGet(id)) {
+      this.openFeaturePicker(id, title)
+      return
+    }
+    let selected = -1
+    try {
+      const result = await this.getUIContext().getPromptAction().showActionMenu({
+        title,
+        buttons: [{ text: '选择设置', color: '#0C9568' }, { text: '获取当前值', color: '#26312C' }]
+      })
+      selected = result.index
+    } catch (_e) {
+      return
+    }
+    if (selected === 0) this.openFeaturePicker(id, title)
+    if (selected === 1) await this.getFeature(id, title)
+  }
+
+  private openFeaturePicker(id: string, title: string): void {
+    if (id === 'alarm') {
+      const selected = new Date()
+      selected.setHours(7, 0, 0, 0)
+      this.getUIContext().showTimePickerDialog({
+        selected,
+        useMilitaryTime: true,
+        onAccept: (value: TimePickerResult) => this.setAlarmTime(value.hour, value.minute)
+      })
+      return
+    }
+    const options = DeviceSettingService.pickerOptions(id)
+    if (options.length === 0) {
+      this.showToast('此功能暂无可选配置')
+      return
+    }
+    this.getUIContext().showTextPickerDialog({
+      range: options,
+      selected: DeviceSettingService.defaultPickerIndex(id),
+      canLoop: false,
+      onAccept: (value: TextPickerResult) => {
+        const index = typeof value.index === 'number' ? value.index : (value.index[0] ?? 0)
+        this.setFeatureSelection(id, index)
       }
     })
   }
 
-  private async setDate(): Promise<void> {
+  private async setFeatureSelection(id: string, index: number): Promise<void> {
     try {
-      await RwBleSdk.setDate()
-      this.addLog('时间已同步')
-    } catch (e) { this.addLog(`同步时间失败: ${JSON.stringify(e)}`) }
+      this.showToast(await DeviceSettingService.setSelected(id, index))
+    } catch (error) {
+      this.showToast(`设置失败: ${error instanceof Error ? error.message : JSON.stringify(error)}`)
+    }
+  }
+
+  private async setAlarmTime(hour: number, minute: number): Promise<void> {
+    try {
+      this.showToast(await DeviceSettingService.setAlarmTime(hour, minute))
+    } catch (error) {
+      this.showToast(`设置失败: ${error instanceof Error ? error.message : JSON.stringify(error)}`)
+    }
+  }
+
+  private async getFeature(id: string, title: string): Promise<void> {
+    try {
+      const value = await DeviceSettingService.get(id)
+      await this.getUIContext().getPromptAction().showDialog({
+        title: `${title}当前值`,
+        message: value,
+        buttons: [{ text: '知道了', color: '#0C9568' }]
+      })
+    } catch (error) {
+      this.showToast(`获取失败: ${error instanceof Error ? error.message : JSON.stringify(error)}`)
+    }
+  }
+
+  private async openPowerMenu(): Promise<void> {
+    if (!this.connected) { this.showToast('请先连接设备'); return }
+    let selected = -1
+    try {
+      const result = await this.getUIContext().getPromptAction().showActionMenu({
+        title: '设备电源操作',
+        buttons: [{ text: '设备关机', color: '#D84B4B' }, { text: '恢复出厂设置', color: '#D84B4B' }]
+      })
+      selected = result.index
+    } catch (_e) {
+      return
+    }
+    try {
+      const confirmation = await this.getUIContext().getPromptAction().showDialog({
+        title: selected === 1 ? '恢复出厂设置' : '设备关机',
+        message: selected === 1 ? '设备数据将被清除，此操作不可撤销。' : '确定让设备关机吗？',
+        buttons: [{ text: '取消', color: '#66716C' }, { text: '确定', color: '#D84B4B' }]
+      })
+      if (confirmation.index !== 1) return
+    } catch (_e) {
+      return
+    }
+    try {
+      await RwBleSdk.setPowerOff(selected === 1 ? 2 : 1)
+      this.showToast(selected === 1 ? '恢复出厂指令已发送' : '关机指令已发送')
+    } catch (error) {
+      this.showToast(`操作失败: ${error instanceof Error ? error.message : JSON.stringify(error)}`)
+    }
+  }
+
+  private goWorkout(): void {
+    if (!this.connected) { this.showToast('请先连接设备'); return }
+    try { this.getUIContext().getRouter().pushUrl({ url: 'pages/WorkoutTypePage' }) } catch (_e) {}
+  }
+
+  private goFirmwareUpgrade(): void {
+    if (!this.connected) { this.showToast('请先连接设备'); return }
+    try { this.getUIContext().getRouter().pushUrl({ url: 'pages/FirmwareUpgradePage' }) } catch (_e) {}
   }
 
   private async shareLogs(): Promise<void> {
@@ -800,62 +1141,38 @@ struct HomePage {
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext
       const logDir = `${ctx.filesDir}/logger/devices`
       const zipPath = `${ctx.cacheDir}/rwsdk_logs.zip`
-      // Persist the latest buffered BLE events before collecting the files.
       RwBleSdk.flushLog()
-      // Check if log dir exists and has files
-      if (!fs.accessSync(logDir)) {
+      if (!fs.accessSync(logDir) || fs.listFileSync(logDir).length === 0) {
         this.showToast('暂无日志文件')
         return
       }
-      const files = fs.listFileSync(logDir)
-      if (files.length === 0) {
-        this.showToast('暂无日志文件')
-        return
-      }
-      // Remove old zip if exists
-      if (fs.accessSync(zipPath)) {
-        fs.unlinkSync(zipPath)
-      }
-      // Zip the log directory
+      if (fs.accessSync(zipPath)) fs.unlinkSync(zipPath)
       await zlib.compressFile(logDir, zipPath, { level: zlib.CompressLevel.COMPRESS_LEVEL_DEFAULT_COMPRESSION })
-      // SystemShare authorizes this sandbox file URI for the selected receiver.
-      const uri = fileUri.getUriFromPath(zipPath)
       const sharedData = new systemShare.SharedData({
         utd: uniformTypeDescriptor.UniformDataType.ZIP_ARCHIVE,
-        uri,
+        uri: fileUri.getUriFromPath(zipPath),
         title: 'RW SDK 日志',
-        description: `${files.length} 个日志文件`
+        description: 'RW BLE SDK 运行日志'
       })
-      const controller = new systemShare.ShareController(sharedData)
-      await controller.show(ctx, {
+      await new systemShare.ShareController(sharedData).show(ctx, {
         selectionMode: systemShare.SelectionMode.SINGLE,
         previewMode: systemShare.SharePreviewMode.DETAIL
       })
-    } catch (e) {
-      this.addLog(`分享日志失败: ${JSON.stringify(e)}`)
+    } catch (_e) {
       this.showToast('分享日志失败')
     }
   }
 
-  private showToast(msg: string): void {
-    try {
-      promptAction.showToast({ message: msg, duration: 2000 })
-    } catch (_e) {}
-  }
-
-  private addLog(msg: string): void {
-    hilog.info(0x0001, 'RWSDK', '[Demo] %{public}s', msg)
-    const line = `[${new Date().toLocaleTimeString()}] ${msg}`
-    this.logText = this.logText ? `${line}\n${this.logText}` : line
+  private showToast(message: string): void {
+    try { promptAction.showToast({ message, duration: 2000 }) } catch (_e) {}
   }
 }
 
 @Extend(Column)
-function sectionStyle() {
+function cardStyle() {
   .alignItems(HorizontalAlign.Start)
   .width('100%')
-  .padding(14)
   .backgroundColor('#FFFFFF')
-  .borderRadius(8)
-  .border({ width: 1, color: '#E5E7EB' })
+  .borderRadius(20)
+  .shadow({ radius: 12, color: '#10253C2D', offsetY: 4 })
 }
