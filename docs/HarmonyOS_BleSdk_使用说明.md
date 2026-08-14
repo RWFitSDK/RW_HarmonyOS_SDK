@@ -299,6 +299,7 @@ SupportMenuBean 属性定义:
 | isSupportSensorRawSleep     | 是否支持睡眠实时数据       |
 | isSupportFallDetect         | 是否支持跌落提醒           |
 | isSupportRecording          | 是否支持录音功能           |
+| isSupportDevicePasswordAuth | 是否支持设备密码认证       |
 
 
 
@@ -1137,6 +1138,36 @@ await RwBleSdk.setCountReminderInterval(0)
 ```
 
 
+##### 3.2.1.26 设备密码认证
+
+> 配置表属性: `isSupportDevicePasswordAuth`
+
+支持该功能的设备会在初始化期间自动认证密码，认证成功后才回调
+`onRingDidFunctionMenu`；认证失败时 SDK 主动断开，并通过
+`onRingConnectFailed("PASSWORD_AUTH_FAILED")` 返回。不支持该功能的设备保持原连接流程。
+
+连接前设置自动认证密码，密码固定为4位数字；空值按默认密码 `0000` 处理：
+
+```typescript
+RwBleSdk.prepareAutoPassword('1234')
+RwBleSdk.connectDeviceWithModel(bleDevice)
+```
+
+修改设备密码：
+
+```typescript
+try {
+  await RwBleSdk.modifyDevicePwd('5678')
+  console.log('密码修改成功')
+} catch (e) {
+  console.error('密码修改失败', JSON.stringify(e))
+}
+```
+
+正常解绑支持密码认证的设备时，业务端应在设备保持连接的情况下先调用
+`await RwBleSdk.modifyDevicePwd('0000')`，成功后再断开连接并清除本地绑定信息。
+
+
 
 #### 3.2.2 健康数据同步(实时单次与全天检测)
 
@@ -1858,6 +1889,9 @@ try {
 
 
 ## SDK修订记录
+
+**v2.0.0_20260807** (2026.08.07)
+- 添加设备密码认证功能（3.2.1.26）
 
 **v2.0.0_20260724** (2026.07.24)
 - 增加计步明细间隔支持

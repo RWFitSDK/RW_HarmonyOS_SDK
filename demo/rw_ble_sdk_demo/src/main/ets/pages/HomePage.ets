@@ -143,6 +143,8 @@ struct HomePage {
       }
     })
     RwBleSdk.initSDK(this.context())
+    // Demo演示密码。正式项目应在连接前传入当前账号对应的4位密码。
+    RwBleSdk.prepareAutoPassword('1234')
     this.sdkVersion = RwBleSdk.getSDKVersion()
     this.refreshPageState()
   }
