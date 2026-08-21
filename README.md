@@ -45,4 +45,4 @@ Demo 通过本地 HAR 依赖 SDK：
 
 SDK 初始化、扫描连接、API 调用、健康同步、实时健康数据、运动控制等说明见：
 
-[docs/RW_HarmonyOS_SDK_集成指南.md](docs/RW_HarmonyOS_SDK_集成指南.md)
+- [HarmonyOS SDK 集成指南](docs/RW_HarmonyOS_SDK_集成指南.md)
