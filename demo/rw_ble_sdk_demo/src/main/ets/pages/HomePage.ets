@@ -355,7 +355,7 @@ struct HomePage {
             if (this.menu?.isPressure === true) this.SupportedFeatureRow('stressMonitoring', '压', '全天压力', '设置全天压力监测')
             if (this.menu?.isBloodPress === true) this.SupportedFeatureRow('bloodPressureMonitoring', '血', '全天血压', '设置全天血压监测')
             if (this.menu?.isBloodSugar === true) this.SupportedFeatureRow('bloodSugarMonitoring', '糖', '全天血糖', '设置全天血糖监测')
-            if (this.menu?.isSupportTemperatureMonitoring === true || this.menu?.isDataTypeTemperature === true) {
+            if (this.menu?.isSupportTemperatureMonitoring === true) {
               this.SupportedFeatureRow('temperatureMonitoring', '温', '全天体温', '设置全天体温监测')
             }
             if (this.menu?.isSupportPPGMonitoring === true) this.SupportedFeatureRow('ppgMonitoring', 'P', 'PPG 定时监测', '设置 PPG 定时监测')
@@ -365,6 +365,7 @@ struct HomePage {
             if (this.menu?.isSupportAlarmVibrationDuration === true) this.SupportedFeatureRow('alarmVibration', '震', '闹钟震动时长', '设置闹钟震动参数')
             if (this.menu?.isSupportVibrationInterval === true) this.SupportedFeatureRow('vibrationInterval', '隔', '震动间隔', '设置每次震动的间隔')
             if (this.menu?.isSupportCountReminder === true) this.SupportedFeatureRow('countReminder', '提', '计数提醒', '设置计数提醒间隔')
+            if (this.menu?.isSupportScreenControl === true) this.SupportedFeatureRow('screenControl', '屏', '即时屏幕控制', '立即亮屏或息屏')
             if (this.menu?.isSupportFallDetect === true) this.SupportedFeatureRow('fallDetect', '落', '跌落提醒', '开启或关闭跌落检测')
             if (this.menu?.isRememberSwitch === true) this.SupportedFeatureRow('rememberSwitch', '念', '赞念开关', '开启或关闭赞念功能')
             if (this.menu?.isSupportMuslimTimeDisplayMode === true) this.SupportedFeatureRow('muslimTimeMode', '时', '赞念时间显示', '设置时间显示模式')
@@ -647,7 +648,7 @@ struct HomePage {
       m.isSupportTemperatureMonitoring === true || m.isSupportPPGMonitoring === true ||
       m.isSupportAlarmVibrationDuration === true || m.isSupportVibrationInterval === true ||
       m.isSupportFallDetect === true || m.isSupportCountReminder === true || m.isRememberSwitch === true ||
-      m.isTakePhoto === true || m.isSupportMuslimTimeDisplayMode === true
+      m.isTakePhoto === true || m.isSupportMuslimTimeDisplayMode === true || m.isSupportScreenControl === true
   }
 
   private syncAllHealth(): void {

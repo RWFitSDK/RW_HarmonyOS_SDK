@@ -1,4 +1,4 @@
-# RW BLE HarmonyOS SDK使用说明文档
+# RW HarmonyOS SDK 集成指南
 
 ## 1. 简介
 
@@ -300,6 +300,7 @@ SupportMenuBean 属性定义:
 | isSupportFallDetect         | 是否支持跌落提醒           |
 | isSupportRecording          | 是否支持录音功能           |
 | isSupportDevicePasswordAuth | 是否支持设备密码认证       |
+| isSupportScreenControl      | 是否支持即时屏幕亮灭控制   |
 
 
 
@@ -1167,6 +1168,51 @@ try {
 正常解绑支持密码认证的设备时，业务端应在设备保持连接的情况下先调用
 `await RwBleSdk.modifyDevicePwd('0000')`，成功后再断开连接并清除本地绑定信息。
 
+###### 3.2.1.26.3 准备授权密码重置
+
+方法说明:
+
+`RwBleSdk.preparePasswordReset(targetPassword?: string | null): void`
+
+> 当无法获得设备原密码时，业务端可在确认用户具备设备重置权限后调用本方法，为下一次连接设置新的目标密码，避免已设置密码的设备无法继续使用。重置权限的确认方式由业务端决定，扫描包装盒二维码只是其中一种方式。
+
+参数说明:
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| targetPassword | string \| null | 重置后的4位数字密码；传入 `null` 或空字符串时按 `0000` 处理 |
+
+调用示例:
+
+```typescript
+// 业务端确认用户具备重置权限后调用。
+RwBleSdk.preparePasswordReset('1234')
+RwBleSdk.connectDeviceWithModel(bleDevice)
+```
+
+重置成功后，该密码会自动用于后续正常连接认证。该授权只对下一次连接有效。
+
+##### 3.2.1.27 即时屏幕控制
+
+> 配置表属性: `isSupportScreenControl`
+
+方法说明:
+
+`RwBleSdk.setScreenOn(isOn: boolean): Promise<void>`
+
+参数说明:
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| isOn | boolean | `true`: 亮屏；`false`: 息屏 |
+
+调用示例:
+
+```typescript
+await RwBleSdk.setScreenOn(true)
+await RwBleSdk.setScreenOn(false)
+```
+
 
 
 #### 3.2.2 健康数据同步(实时单次与全天检测)
@@ -1554,11 +1600,61 @@ RwBleSdk.syncHealthDataByType(RingHealthType.STEP, syncCallback)
 
 #### 3.2.3 OTA升级
 
-> [!NOTE]
+> [!CAUTION]
 >
-> 请仅使用 RW 提供且与设备型号匹配的 OTA 固件，升级过程中请保持设备连接。
+> OTA升级文件必须由设备厂家提供。升级前先通过 [3.2.1.3 获取设备信息](#3213-获取设备信息) 读取 `FirmVersionBean.deviceClazz`，并与升级文件适用的设备型号进行对比。只有两个型号完全一致时才能升级；型号不一致时禁止升级。
 >
 > SDK会自动识别 PXI 或 Telink OTA 平台，调用方无需选择平台。PXI 与 Telink 固件不可交叉使用，升级过程中请避免同时下发其他业务指令。
+
+##### 3.2.3.1 获取可用固件
+
+可通过以下接口查询指定设备型号的可用固件列表:
+
+```http
+GET https://ruiwo168.com/api/device/getOtaListByModel?model=<deviceClazz>
+```
+
+查询参数 `model` 对应 `getFirmwareVersion()` 返回的 `FirmVersionBean.deviceClazz`。请求接口前应先读取设备固件信息，并使用设备实际返回的 `deviceClazz` 作为 `model`。
+
+```typescript
+const firmware = await RwBleSdk.getFirmwareVersion()
+const deviceClazz = firmware.deviceClazz
+const currentVersion = firmware.deviceNo
+const url = `https://ruiwo168.com/api/device/getOtaListByModel?model=${encodeURIComponent(deviceClazz)}`
+console.log(`query firmware: ${url}, currentVersion=${currentVersion}`)
+```
+
+接口返回示例:
+
+```json
+{
+  "code": 0,
+  "msg": "操作成功",
+  "data": [
+    {
+      "deviceModel": "DEVICE_MODEL",
+      "toVersion": "X.Y.Z",
+      "size": 123456,
+      "downloadUrl": "https://example.com/path/firmware.bin"
+    }
+  ]
+}
+```
+
+OTA流程只需关注 `data` 中的以下字段，其他字段可以忽略:
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| deviceModel | string | 固件适用的设备型号，应与 `FirmVersionBean.deviceClazz` 完全一致 |
+| toVersion | string | 固件版本号，正式发布时用于判断是否有更高版本可升级 |
+| size | number | 固件文件大小，单位为字节(Byte) |
+| downloadUrl | string | 固件文件下载地址 |
+
+正式发布时，APP应按 `X.Y.Z` 各段数值比较当前版本 `deviceNo` 与目标版本 `toVersion`，通常只提示升级到更高版本，不能直接按字符串比较。测试时可在确认固件有效后进行同版本升级或降级测试。
+
+下载及升级前均须确认 `deviceModel` 与设备的 `deviceClazz` 完全一致。固件下载到本地后，将文件路径传给 `ringOtaWithFileData()`；如使用自有服务器，请自行维护设备型号、版本号与固件包的对应关系。
+
+##### 3.2.3.2 执行OTA升级
 
 方法说明:
 
@@ -1756,13 +1852,20 @@ results.forEach(r => {
 
 #### 3.2.5 传感器原始数据
 
-> PPG/ACC/PPG Red/IR传感器原始数据采集与睡眠实时数据;
->
-> 配置表属性: `isSupportSensorRawPPG` (PPG), `isSupportSensorRawACC` (ACC), `isSupportSensorRawPPGRed` (PPG Red), `isSupportSensorRawIR` (IR), `isSupportSensorRawSleep` (睡眠实时数据);
->
-> **注意: 睡眠实时数据对应回调结果 `SensorRawDataBean.type=5`，无需手动启动与关闭，设备支持时会在睡眠过程中自动推送。控制参数 `sensorType=5` 表示红光 + ACC，不表示睡眠。**
+本节包含两种不同的数据方式:
 
-sensorType 合法组合:
+| 数据 | 获取方式 | 说明 |
+| ---- | -------- | ---- |
+| PPG/ACC/PPG Red/IR原始数据 | 历史获取 | APP控制设备开始/停止采集, 采集完成后主动同步历史数据 |
+| 睡眠状态数据 | 实时推送 | 设备在睡眠过程中自动推送, APP只需订阅回调 |
+
+> **重要:** PPG/ACC/PPG Red/IR原始数据不支持实时推送, 仅支持历史方式获取; 睡眠状态数据只使用实时推送, 不通过历史原始数据接口获取.
+>
+> 设备只保存最近一次约1分钟的PPG原始数据, 无论由定时监测还是手动测量触发, 下一次采集都可能覆盖尚未同步的数据; 采集完成后应及时调用 `RwBleSdk.getSensorHistoryRaw()` 同步并持久化数据.
+>
+> 配置表属性: `isSupportSensorRawPPG` (PPG), `isSupportSensorRawACC` (ACC), `isSupportSensorRawPPGRed` (PPG Red), `isSupportSensorRawIR` (IR), `isSupportSensorRawSleep` (睡眠实时数据).
+
+PPG/ACC/PPG Red/IR历史采集的 `sensorType` 合法组合:
 
 | 值   | 含义              | 说明                    |
 | ---- | ----------------- | ----------------------- |
@@ -1777,18 +1880,8 @@ sensorType 合法组合:
 | 13   | 红光 + ACC + 红外 | 红光、ACC与红外同时输出 |
 
 > **规则: 绿光与红光不能共存; 红外不能单独启动,必须与绿光或红光组合使用.**
-
-返回数据 `SensorRawDataBean` 格式说明:
-
-| 字段           | 类型              | 说明                                    |
-| -------------- | ----------------- | --------------------------------------- |
-| type           | number            | 0=设备时间, 1=PPG, 2=ACC, 3=PPG Red, 4=IR, 5=睡眠 |
-| timestamp      | number（可选） | `type=0`时的设备时间戳                  |
-| ppgDataList    | number[]（可选） | PPG数据列表                             |
-| accDataList    | AccRawItem[]（可选） | ACC数据列表, 每项包含 `x/y/z`         |
-| ppgRedDataList | number[]（可选） | PPG Red数据列表                         |
-| irDataList     | number[]（可选） | IR红外数据列表                          |
-| sleepDataList  | SleepRawItem[]（可选） | 睡眠数据: `time`(时间戳), `mode`(睡眠模式) |
+>
+> **注意:** 控制接口的 `sensorType` 是传感器按位组合值, 返回对象的 `type` 是数据类型, 两者编号定义不同. 例如 `sensorType=1` 表示开启ACC, 而历史数据 `type=1` 表示PPG; `sensorType=5` 表示红光+ACC, 而睡眠实时数据 `type=5` 表示睡眠状态.
 
 ##### 3.2.5.0 PPG定时监测
 
@@ -1801,6 +1894,8 @@ sensorType 合法组合:
 > 用法同心率定时监测(3.2.2.2.1)一致.
 
 ##### 3.2.5.1 启动与关闭传感器原始数据
+
+> 本接口仅用于控制PPG/ACC/PPG Red/IR历史原始数据采集, 睡眠实时数据无需调用此接口.
 
 方法说明: 
 
@@ -1823,55 +1918,35 @@ await RwBleSdk.controlSensorRaw(1, 3)
 await RwBleSdk.controlSensorRaw(2, 3)
 ```
 
-设备也可能主动停止传感器输出。当前 HarmonyOS SDK 使用 Promise 返回启动/关闭指令应答，实时数据通过下一节的订阅接口获取。
+`Promise` 完成表示设备已应答本次启动或关闭指令, 不表示历史数据已经同步完成.
 
 
-##### 3.2.5.2 数据获取方式
+##### 3.2.5.2 历史原始数据获取
 
-> 传感器原始数据有两种获取方式，**由设备端决定使用哪种，APP不可选择**:
->
-> (1) 实时推送: 启动后设备实时推送数据到APP;
->
-> (2) 历史获取: 设备先采集保存，APP后续主动同步获取。
-
-###### 3.2.5.2.1 实时推送
-
-> 启动传感器后，通过 `SensorRawDataBean` 接收设备实时推送的原始数据。
-
-方法说明:
-
-`RwBleSdk.onSensorRawData(cb: (value: SensorRawDataBean) => void): () => void`
-
-调用示例:
-
-```typescript
-const unsubscribe = RwBleSdk.onSensorRawData((data) => {
-  switch (data.type) {
-    case 1: console.log(`PPG: ${data.ppgDataList?.length ?? 0}项`); break
-    case 2: console.log(`ACC: ${data.accDataList?.length ?? 0}项`); break
-    case 3: console.log(`PPG Red: ${data.ppgRedDataList?.length ?? 0}项`); break
-    case 4: console.log(`IR: ${data.irDataList?.length ?? 0}项`); break
-    case 5: console.log(`Sleep: ${data.sleepDataList?.length ?? 0}项`); break
-  }
-})
-
-await RwBleSdk.controlSensorRaw(1, 3)
-
-// 页面退出时关闭并取消订阅
-await RwBleSdk.controlSensorRaw(2, 3)
-unsubscribe()
-```
-
-
-###### 3.2.5.2.2 历史获取
-
-> 获取设备保存的传感器历史原始数据.
+> PPG/ACC/PPG Red/IR原始数据仅支持历史方式获取. 设备先采集并保存数据, APP后续通过 `RwBleSdk.getSensorHistoryRaw()` 主动同步获取.
 
 方法说明:
 
 `RwBleSdk.getSensorHistoryRaw(): Promise<SensorHistoryRawBean[]>`
 
-返回设备历史传感器记录。`type` 为 1/2/3/4 时分别使用 `ppgDataList`、`accDataList`、`ppgRedDataList`、`irDataList`；`sequence` 为设备记录序号。
+`SensorHistoryRawBean` 字段说明:
+
+| 字段           | 类型         | 说明                                      |
+| -------------- | ------------ | ----------------------------------------- |
+| type           | number       | 数据类型: 1=PPG, 2=ACC, 3=PPG Red, 4=IR |
+| sequence       | number       | 数据包序号, 从1开始, 多个传感器共用同一序号 |
+| ppgDataList    | number[]     | PPG数据列表, 每项为int32                  |
+| accDataList    | AccRawItem[] | ACC数据列表, 每项包含x、y、z (int16)      |
+| ppgRedDataList | number[]     | PPG Red数据列表, 每项为int32              |
+| irDataList     | number[]     | IR红外数据列表, 每项为int32               |
+
+`AccRawItem` 字段说明:
+
+| 字段 | 类型   | 说明          |
+| ---- | ------ | ------------- |
+| x    | number | X轴值 (int16) |
+| y    | number | Y轴值 (int16) |
+| z    | number | Z轴值 (int16) |
 
 调用示例:
 
@@ -1887,8 +1962,53 @@ try {
 ```
 
 
+##### 3.2.5.3 睡眠状态实时推送
+
+> 睡眠状态数据只支持实时推送. 无需调用 `RwBleSdk.controlSensorRaw()` 启动或关闭; 设备支持此功能时, 会在睡眠过程中自动推送.
+>
+> 配置表属性: `isSupportSensorRawSleep`.
+
+方法说明:
+
+`RwBleSdk.onSensorRawData(cb: (value: SensorRawDataBean) => void): () => void`
+
+返回说明:
+
+| `SensorRawDataBean`字段 | 类型           | 说明 |
+| ----------------------- | -------------- | ---- |
+| type                    | number         | 固定为5, 表示睡眠状态数据 |
+| sleepDataList           | SleepRawItem[] | 睡眠状态列表, 每项包含 `time` 和 `mode` |
+
+`SleepRawItem` 字段说明:
+
+| 字段 | 类型   | 说明 |
+| ---- | ------ | ---- |
+| time | number | Unix时间戳, 单位秒(s) |
+| mode | number | 睡眠状态: 17=睡眠开始, 34=睡眠结束, 1=深睡, 2=浅睡, 3=清醒, 4=REM |
+
+调用示例:
+
+```typescript
+const unsubscribe = RwBleSdk.onSensorRawData((data) => {
+  if (data.type !== 5) return
+  data.sleepDataList?.forEach(item => {
+    console.log(`睡眠时间:${item.time} 状态:${item.mode}`)
+  })
+})
+
+// 页面退出或不再接收时取消订阅
+unsubscribe()
+```
+
+
 
 ## SDK修订记录
+
+**v2.0.0_20260820** (2026.08.20)
+- 添加即时屏幕控制功能(3.2.1.27)
+- 添加调试、测试用自定义设备时间设置接口 `setDeviceTime`
+- 添加授权密码重置功能（3.2.1.26.3）
+- 补充获取可用固件及OTA型号、版本校验说明(3.2.3.1)
 
 **v2.0.0_20260807** (2026.08.07)
 - 添加设备密码认证功能（3.2.1.26）

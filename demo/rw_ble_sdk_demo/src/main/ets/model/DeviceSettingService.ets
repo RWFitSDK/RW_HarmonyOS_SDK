@@ -29,6 +29,7 @@ export class DeviceSettingService {
       case 'alarmVibration': return ['不震动', '1 次', '2 次', '3 次', '4 次', '5 次', '6 次']
       case 'vibrationInterval': return ['100 ms', '200 ms', '300 ms', '500 ms', '1000 ms']
       case 'countReminder': return ['关闭', '30 分钟', '60 分钟', '90 分钟', '120 分钟']
+      case 'screenControl': return ['立即息屏', '立即亮屏']
       case 'fallDetect':
       case 'rememberSwitch': return ['关闭', '开启']
       case 'muslimTimeMode': return ['唤醒先显示时间', '不显示时间', '休眠 10 分钟后显示']
@@ -51,6 +52,7 @@ export class DeviceSettingService {
       case 'alarmVibration': return 3
       case 'vibrationInterval': return 3
       case 'countReminder': return 2
+      case 'screenControl': return 1
       case 'fallDetect':
       case 'rememberSwitch': return 1
       case 'muslimTimeMode': return 2
@@ -163,6 +165,11 @@ export class DeviceSettingService {
         await RwBleSdk.setCountReminderInterval(value)
         return value > 0 ? `计数提醒已设为 ${value} 分钟` : '计数提醒已关闭'
       }
+      case 'screenControl': {
+        const isOn = index === 1
+        await RwBleSdk.setScreenOn(isOn)
+        return isOn ? '当前已亮屏' : '当前已息屏'
+      }
       case 'fallDetect': {
         const enabled = index === 1
         await RwBleSdk.setFallDetect(enabled ? 1 : 0)
@@ -200,6 +207,7 @@ export class DeviceSettingService {
       case 'alarmVibration': return `${await RwBleSdk.getAlarmVibrationDuration()} 次`
       case 'vibrationInterval': return `${await RwBleSdk.getVibrationInterval()} ms`
       case 'countReminder': return `${await RwBleSdk.getCountReminderInterval()} 分钟`
+      case 'screenControl': return await RwBleSdk.getScreenOn() ? '当前亮屏' : '当前息屏'
       case 'fallDetect': return (await RwBleSdk.getFallDetect()) === 1 ? '已开启' : '已关闭'
       case 'rememberSwitch': return (await RwBleSdk.getMuslimCountSwitch()) === 1 ? '已开启' : '已关闭'
       case 'muslimTimeMode': return `模式 ${await RwBleSdk.getMuslimTimeDisplayMode()}`
