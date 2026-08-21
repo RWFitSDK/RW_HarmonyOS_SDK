@@ -18,7 +18,7 @@ RW_HarmonyOS_SDK/
 ├── libs/
 │   └── rw_ble_sdk.har              # SDK HAR 包
 └── docs/
-    ├── HarmonyOS_BleSdk_使用说明.md # SDK 接入和 API 使用说明
+    ├── RW_HarmonyOS_SDK_集成指南.md # SDK 接入和 API 使用说明
     ├── harmonyos-demo-home.jpg      # Demo 首页效果图
     └── harmonyos-demo-device-features.jpg # Demo 设备功能页效果图
 ```
@@ -45,4 +45,4 @@ Demo 通过本地 HAR 依赖 SDK：
 
 SDK 初始化、扫描连接、API 调用、健康同步、实时健康数据、运动控制等说明见：
 
-[docs/HarmonyOS_BleSdk_使用说明.md](docs/HarmonyOS_BleSdk_使用说明.md)
+[docs/RW_HarmonyOS_SDK_集成指南.md](docs/RW_HarmonyOS_SDK_集成指南.md)
