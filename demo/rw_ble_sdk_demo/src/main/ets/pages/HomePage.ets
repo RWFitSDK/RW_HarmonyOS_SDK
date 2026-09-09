@@ -366,6 +366,7 @@ struct HomePage {
             if (this.menu?.isSupportVibrationInterval === true) this.SupportedFeatureRow('vibrationInterval', '隔', '震动间隔', '设置每次震动的间隔')
             if (this.menu?.isSupportCountReminder === true) this.SupportedFeatureRow('countReminder', '提', '计数提醒', '设置计数提醒间隔')
             if (this.menu?.isSupportScreenControl === true) this.SupportedFeatureRow('screenControl', '屏', '即时屏幕控制', '立即亮屏或息屏')
+            if (this.menu?.isSupportUnitSetting === true) this.SupportedFeatureRow('measureUnit', '制', '单位设置', '切换公制或英制')
             if (this.menu?.isSupportFallDetect === true) this.SupportedFeatureRow('fallDetect', '落', '跌落提醒', '开启或关闭跌落检测')
             if (this.menu?.isRememberSwitch === true) this.SupportedFeatureRow('rememberSwitch', '念', '赞念开关', '开启或关闭赞念功能')
             if (this.menu?.isSupportMuslimTimeDisplayMode === true) this.SupportedFeatureRow('muslimTimeMode', '时', '赞念时间显示', '设置时间显示模式')
@@ -648,7 +649,8 @@ struct HomePage {
       m.isSupportTemperatureMonitoring === true || m.isSupportPPGMonitoring === true ||
       m.isSupportAlarmVibrationDuration === true || m.isSupportVibrationInterval === true ||
       m.isSupportFallDetect === true || m.isSupportCountReminder === true || m.isRememberSwitch === true ||
-      m.isTakePhoto === true || m.isSupportMuslimTimeDisplayMode === true || m.isSupportScreenControl === true
+      m.isTakePhoto === true || m.isSupportMuslimTimeDisplayMode === true || m.isSupportScreenControl === true ||
+      m.isSupportUnitSetting === true
   }
 
   private syncAllHealth(): void {
@@ -999,7 +1001,7 @@ struct HomePage {
     this.powerRequest = request
     try {
       const result: PowerBean = await request
-      this.powerText = `${result.power}%`
+      this.powerText = `${result.power}% · ${result.powerStatus === 1 ? '充电中' : '未充电'}`
       if (showResult) this.showToast('电量已更新')
     } catch (error) {
       this.showToast(`电量获取失败: ${error instanceof Error ? error.message : JSON.stringify(error)}`)
@@ -1013,7 +1015,7 @@ struct HomePage {
     this.pushUnsub = RwBleSdk.subscribePush((data: PushData) => {
       if (data.type !== DevicePushType.POWER) return
       const power = data.value as PowerBean
-      this.powerText = `${power.power}%`
+      this.powerText = `${power.power}% · ${power.powerStatus === 1 ? '充电中' : '未充电'}`
     })
   }
 

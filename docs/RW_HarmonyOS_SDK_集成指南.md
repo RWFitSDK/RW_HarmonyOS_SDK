@@ -126,7 +126,7 @@ RwBleSdk.startScan({
 RwBleSdk.stopScan()
 ```
 
-SDK 默认只返回支持的 RW 设备，扫描会在 15 秒后自动停止。
+SDK 默认只返回符合 SDK 广播数据格式的设备，扫描会在 15 秒后自动停止。
 
 `RwBleDevice` 中与连接相关的主要字段:
 
@@ -137,6 +137,7 @@ SDK 默认只返回支持的 RW 设备，扫描会在 15 秒后自动停止。
 | `name` | 设备广播名称 |
 | `rssi` | 当前扫描信号强度 |
 | `data` | 原始广播数据 |
+| `uuid` | 同 `deviceId`，兼容旧字段 |
 
 ##### 3.1.2 停止搜索
 
@@ -268,6 +269,7 @@ SupportMenuBean 属性定义:
 | isRaiseBrightScreen         | 是否支持抬腕亮屏         |
 | isLEDLight                  | 是否支持LED亮度设置      |
 | isWearDir                   | 是否支持佩戴方向设置     |
+| isSetBTName                 | 是否支持修改设备蓝牙名称 |
 | isTakePhoto                 | 是否支持拍照控制         |
 | isNewSport                  | 是否支持多运动           |
 | isRememberSwitch            | 是否支持Muslim赞念开关   |
@@ -301,6 +303,7 @@ SupportMenuBean 属性定义:
 | isSupportRecording          | 是否支持录音功能           |
 | isSupportDevicePasswordAuth | 是否支持设备密码认证       |
 | isSupportScreenControl      | 是否支持即时屏幕亮灭控制   |
+| isSupportUnitSetting        | 是否支持公制/英制单位设置  |
 
 
 
@@ -414,6 +417,7 @@ try {
   const power = await RwBleSdk.getPower()
   console.log(`电量: ${power.power}%`)
   console.log(`电压: ${power.voltage}`)
+  console.log(`充电状态: ${power.powerStatus}`)
 } catch (e) {
   console.error('获取电量失败', JSON.stringify(e))
 }
@@ -423,9 +427,25 @@ PowerBean:
 
 ```typescript
 interface PowerBean {
-  power: number     // 电量 0-100
-  voltage?: number  // 电压
+  power: number       // 电量 0-100
+  voltage?: number    // 电压
+  powerStatus: number // 0未在充电，1正在充电；需固件支持，旧固件默认为0
 }
+```
+
+###### 3.2.1.4.1 实时电量监听
+
+支持实时电量推送的设备，会在开始充电或停止充电时主动推送当前电量和充电状态。该能力需设备固件支持；如需主动获取当前电量，请调用 `getPower()`。
+
+```typescript
+const unsubscribe = RwBleSdk.subscribePush((data: PushData) => {
+  if (data.type !== DevicePushType.POWER) return
+  const power = data.value as PowerBean
+  console.log(`实时电量=${power.power}, 充电状态=${power.powerStatus}`)
+})
+
+// 不再使用时取消订阅
+unsubscribe()
 ```
 
 
@@ -597,7 +617,7 @@ console.log(`闹钟: ${JSON.stringify(alarms)}`)
 
 ###### 3.2.1.11.2 设置闹钟
 
-> **当前协议不支持单独修改闹钟，任何单个闹钟的开关或删除操作，均需重新下发全部闹钟配置。**
+> **当前接口不支持单独修改闹钟，任何单个闹钟的开关或删除操作，均需重新下发全部闹钟配置。**
 
 方法说明:
 
@@ -606,6 +626,10 @@ console.log(`闹钟: ${JSON.stringify(alarms)}`)
 `RwBleSdk.setAlarm(alarms: AlarmRemainderBean[]): Promise<void>`
 
 `setAlarm()` 与 `setAlarmRemind()` 功能相同，任选其一使用。
+
+> [!NOTE]
+>
+> 传入**空数组**时为空操作，不会删除任何闹钟；删除全部闹钟需显式调用 `deleteAllAlarmRemind()`（见 3.2.1.11.3）。
 
 参数说明:
 
@@ -1200,17 +1224,67 @@ RwBleSdk.connectDeviceWithModel(bleDevice)
 
 `RwBleSdk.setScreenOn(isOn: boolean): Promise<void>`
 
+`RwBleSdk.getScreenOn(): Promise<boolean>`
+
 参数说明:
 
 | 参数 | 类型 | 说明 |
 | --- | --- | --- |
 | isOn | boolean | `true`: 亮屏；`false`: 息屏 |
 
+返回说明:
+
+| 方法 | 类型 | 说明 |
+| --- | --- | --- |
+| getScreenOn | boolean | `true`: 当前亮屏；`false`: 当前息屏。查询不会重置亮屏倒计时 |
+
 调用示例:
 
 ```typescript
 await RwBleSdk.setScreenOn(true)
 await RwBleSdk.setScreenOn(false)
+const on = await RwBleSdk.getScreenOn()
+console.log(`当前屏幕=${on ? '亮屏' : '息屏'}`)
+```
+
+##### 3.2.1.28 公制/英制单位设置与获取
+
+> 功能配置表属性：`isSupportUnitSetting`。仅支持该能力的设备可使用。
+
+方法说明:
+
+`RwBleSdk.setMeasureUnit(type: number): Promise<void>`
+
+`RwBleSdk.getMeasureUnit(): Promise<number>`
+
+参数说明:
+
+| 参数 | 类型 | 说明 |
+| --- | --- | --- |
+| type | number | `0`：公制；`1`：英制 |
+
+调用示例:
+
+```typescript
+await RwBleSdk.setMeasureUnit(0)
+const type = await RwBleSdk.getMeasureUnit()
+console.log(`当前单位=${type}`)
+```
+
+##### 3.2.1.29 修改设备蓝牙名称
+
+> 功能配置表属性：`isSetBTName`。仅支持该能力的设备可使用。
+
+方法说明:
+
+`RwBleSdk.setRingBtName(btName: string): Promise<void>`
+
+`btName` 最多发送 24 字节 UTF-8 数据，超出部分由 SDK 自动截断。
+
+调用示例:
+
+```typescript
+await RwBleSdk.setRingBtName('My Ring')
 ```
 
 
@@ -1245,15 +1319,19 @@ await RwBleSdk.setScreenOn(false)
 
 | 参数       | 类型       | 说明         | 值                                                           |
 | ---------- | ---------- | ------------ | ------------------------------------------------------------ |
-| healthType | number | 健康数据类型 | HealthType.HR / BO / HRV / PRESSURE / BLOOD_SUGAR / BP / TEMPERATURE |
+| healthType | number | 检测类型（DataType 低字节） | ControlHealthType.HR / BP / TEMPERATURE / BO / HRV / PRESSURE / BLOOD_SUGAR |
 | start      | number \| boolean | 启动/关闭 | true/1: 启动, false/0: 关闭 |
+
+> [!CAUTION]
+>
+> `controlHealthData` 的 `healthType` 必须使用 `ControlHealthType`。`HealthType` 用于识别实时推送数据，两者不能混用。
 
 调用示例:
 
 ```typescript
-import { HealthType } from 'rw_ble_sdk'
+import { HealthType, ControlHealthType } from 'rw_ble_sdk'
 
-// 订阅实时健康数据
+// 订阅实时健康数据（推送 dataType 用 HealthType）
 const unsub = RwBleSdk.onHealthRealtimeData((data) => {
   switch (data.dataType) {
     case HealthType.HR:
@@ -1285,14 +1363,21 @@ const unsubControl = RwBleSdk.onHealthControlEvent((value) => {
   console.log(`健康检测状态: ${JSON.stringify(value)}`)
 })
 
-// 启动心率检测
-await RwBleSdk.controlHealthData(HealthType.HR, true)
+// 启动心率检测（控制指令用 ControlHealthType）
+await RwBleSdk.controlHealthData(ControlHealthType.HR, true)
 
 // 关闭心率检测
-await RwBleSdk.controlHealthData(HealthType.HR, false)
+await RwBleSdk.controlHealthData(ControlHealthType.HR, false)
 unsub()
 unsubControl()
 ```
+
+HealthControlEventBean 说明:
+
+| 字段       | 类型   | 说明                                                         |
+| ---------- | ------ | ------------------------------------------------------------ |
+| healthType | number | 检测类型，回显控制指令的 DataType 低字节（同 `ControlHealthType`） |
+| status     | number | `0`: 检测结束/已停止, `1`: 检测开始。检测完成时设备会上报 `status=0` |
 
 HealthDataSyncBean 说明:
 
@@ -1363,6 +1448,8 @@ await RwBleSdk.setTimedHeartRate({
 const hr = await RwBleSdk.getTimedHeartRate()
 console.log(`心率监听: ${hr.isOpen} 间隔${hr.remindDuration}分钟`)
 ```
+
+`DrinkReminderBean.durationNums` 表示设备支持的监测间隔，多个值以下划线分隔，例如 `30_60`。
 
 ###### 3.2.2.2.2 血氧检测设置与获取
 
@@ -1604,7 +1691,7 @@ RwBleSdk.syncHealthDataByType(RingHealthType.STEP, syncCallback)
 >
 > OTA升级文件必须由设备厂家提供。升级前先通过 [3.2.1.3 获取设备信息](#3213-获取设备信息) 读取 `FirmVersionBean.deviceClazz`，并与升级文件适用的设备型号进行对比。只有两个型号完全一致时才能升级；型号不一致时禁止升级。
 >
-> SDK会自动识别 PXI 或 Telink OTA 平台，调用方无需选择平台。PXI 与 Telink 固件不可交叉使用，升级过程中请避免同时下发其他业务指令。
+> SDK 会自动识别设备的 OTA 类型，调用方无需选择。升级过程中请避免同时下发其他业务指令。
 
 ##### 3.2.3.1 获取可用固件
 
@@ -1680,19 +1767,15 @@ RwBleSdk.ringOtaWithFileData(otaFilePath, {
 
 错误码说明:
 
-| 平台 | 错误码 | 含义 |
-| --- | ---: | --- |
-| 通用 | -3 | 当前连接未发现 PXI 或 Telink OTA 服务 |
-| Telink | 1 | Telink升级过程中设备断开 |
-| Telink | 2 | 固件文件读取失败 |
-| Telink | 3 | OTA升级超时 |
-| Telink | 4 | 设备返回升级失败 |
-| Telink | 5 | OTA数据写入失败 |
-| PXI | 11 | 固件文件读取失败 |
-| PXI | 12 | 设备未连接或升级中断开 |
-| PXI | 13 | CRC校验失败 |
-| PXI | 14 | OTA步骤超时 |
-| PXI | 15 | OTA数据写入失败或参数异常 |
+| 错误码 | 含义 |
+| ---: | --- |
+| -3 | 当前连接未发现 OTA 服务 |
+| 1、12 | 设备未连接或升级过程中断开 |
+| 2、11 | 固件文件读取失败 |
+| 3、14 | OTA 升级超时 |
+| 4 | 设备返回升级失败 |
+| 5、15 | OTA 数据写入失败或参数异常 |
+| 13 | CRC 校验失败 |
 
 > 请在设备连接成功并获取功能配置表后再启动 OTA。
 
@@ -2003,6 +2086,11 @@ unsubscribe()
 
 
 ## SDK修订记录
+
+**v2.0.0_20260909** (2026.09.09)
+- 添加公制/英制单位设置与获取接口(3.2.1.28)
+- 电量数据新增充电状态及实时电量监听(3.2.1.4)
+- 完善定时监测间隔返回，新增设备蓝牙名称设置接口(3.2.1.29)
 
 **v2.0.0_20260820** (2026.08.20)
 - 添加即时屏幕控制功能(3.2.1.27)
