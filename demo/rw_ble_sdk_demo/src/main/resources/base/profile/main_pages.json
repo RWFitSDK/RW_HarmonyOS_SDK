@@ -5,6 +5,7 @@
     "pages/ScanPage",
     "pages/FirmwareUpgradePage",
     "pages/WorkoutTypePage",
-    "pages/WorkoutRunningPage"
+    "pages/WorkoutRunningPage",
+    "pages/RecordingPage"
   ]
 }

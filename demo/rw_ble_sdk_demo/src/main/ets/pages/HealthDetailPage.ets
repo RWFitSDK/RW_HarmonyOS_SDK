@@ -1,5 +1,5 @@
 import { promptAction } from '@kit.ArkUI';
-import { HealthDataSyncBean, RwBleSdk } from 'rw_ble_sdk';
+import { DevicePushType, HealthDataSyncBean, MuslimCountItemBean, PushData, RwBleSdk } from 'rw_ble_sdk';
 
 interface HealthDetailRouteParams {
   type?: string
@@ -30,12 +30,20 @@ struct HealthDetailPage {
   @State private records: Array<HealthDisplayRecord> = []
 
   private dataUnsub: (() => void) | null = null
+  private pushUnsub: (() => void) | null = null
   private controlUnsub: (() => void) | null = null
 
   aboutToAppear(): void {
     this.loadParams()
     this.connected = RwBleSdk.isBleConnected()
     this.dataUnsub = RwBleSdk.onHealthRealtimeData((data: HealthDataSyncBean) => this.receiveRealtime(data))
+    // 赞念计数实时上报走统一设备推送通道; 只刷新"最近一次"实时值, 不写入历史记录列表
+    this.pushUnsub = RwBleSdk.subscribePush((data: PushData) => {
+      if (data.type !== DevicePushType.MUSLIM_COUNT || this.type !== 'muslimCount') return
+      const item = data.value as MuslimCountItemBean
+      this.latestValue = `${item.count}`
+      this.latestTime = `实时计数 · ${new Date().toLocaleTimeString()}`
+    })
     this.controlUnsub = RwBleSdk.onHealthControlEvent((data: Object) => {
       const event = data as Record<string, number>
       if (event.healthType === this.measurementCode && event.status === 0) {
@@ -52,8 +60,10 @@ struct HealthDetailPage {
     }
     this.dataUnsub?.()
     this.controlUnsub?.()
+    this.pushUnsub?.()
     this.dataUnsub = null
     this.controlUnsub = null
+    this.pushUnsub = null
   }
 
   build() {
@@ -237,7 +247,6 @@ struct HealthDetailPage {
       case 'heartRate': return `${data.hrValue ?? data.value ?? 0} bpm`
       case 'bloodOxygen': return `${data.boValue ?? data.value ?? 0}%`
       case 'bloodPressure': return `${data.bpSp ?? 0}/${data.bpDp ?? 0} mmHg`
-      case 'stress': return `${data.pressureValue ?? data.value ?? 0}`
       case 'bloodSugar': return `${data.bloodSugarValue ?? data.value ?? 0}`
       case 'muslimCount': return `${data.muslimCount ?? data.value ?? 0}`
       case 'temperature': return `${data.temperature ?? ((data.tempValue ?? data.value ?? 0) / 10)} ℃`

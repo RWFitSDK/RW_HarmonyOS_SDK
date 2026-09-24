@@ -15,6 +15,7 @@ import {
   HeartRateSyncBean,
   HrvSyncBean,
   MuslimCountSyncBean,
+  MuslimCountItemBean,
   PowerBean,
   PressureSyncBean,
   PushData,
@@ -144,7 +145,7 @@ struct HomePage {
     })
     RwBleSdk.initSDK(this.context())
     // Demo演示密码。正式项目应在连接前传入当前账号对应的4位密码。
-    RwBleSdk.prepareAutoPassword('1234')
+    RwBleSdk.prepareAutoPassword('4567')
     this.sdkVersion = RwBleSdk.getSDKVersion()
     this.refreshPageState()
   }
@@ -368,6 +369,17 @@ struct HomePage {
             if (this.menu?.isSupportScreenControl === true) this.SupportedFeatureRow('screenControl', '屏', '即时屏幕控制', '立即亮屏或息屏')
             if (this.menu?.isSupportUnitSetting === true) this.SupportedFeatureRow('measureUnit', '制', '单位设置', '切换公制或英制')
             if (this.menu?.isSupportFallDetect === true) this.SupportedFeatureRow('fallDetect', '落', '跌落提醒', '开启或关闭跌落检测')
+            if (this.menu?.isSupportRecording === true) {
+              this.FeatureRow('录', '录音', '开始停止 / 文件列表 / 下载删除 / 格式化', '进入录音页',
+                () => { try { this.getUIContext().getRouter().pushUrl({ url: 'pages/RecordingPage' }) } catch (_e) {} })
+              this.DividerLine()
+            }
+            if (this.menu?.isSupportDeviceChallenge === true) {
+              this.FeatureRow('识', '设备身份认证', 'HMAC-SHA256 挑战应答(测试向量)', '立即执行', () => this.runDeviceChallenge())
+              this.DividerLine()
+            }
+            if (this.menu?.isSupportSedentary === true) this.SupportedFeatureRow('sedentary', '坐', '久坐提醒', '设置提醒间隔与时段')
+            if (this.menu?.isDrink === true) this.SupportedFeatureRow('drink', '喝', '喝水提醒', '设置提醒间隔与时段')
             if (this.menu?.isRememberSwitch === true) this.SupportedFeatureRow('rememberSwitch', '念', '赞念开关', '开启或关闭赞念功能')
             if (this.menu?.isSupportMuslimTimeDisplayMode === true) this.SupportedFeatureRow('muslimTimeMode', '时', '赞念时间显示', '设置时间显示模式')
             if (this.menu?.isPowerOff === true || this.menu?.isRecovery === true) {
@@ -650,7 +662,8 @@ struct HomePage {
       m.isSupportAlarmVibrationDuration === true || m.isSupportVibrationInterval === true ||
       m.isSupportFallDetect === true || m.isSupportCountReminder === true || m.isRememberSwitch === true ||
       m.isTakePhoto === true || m.isSupportMuslimTimeDisplayMode === true || m.isSupportScreenControl === true ||
-      m.isSupportUnitSetting === true
+      m.isSupportUnitSetting === true || m.isSupportRecording === true || m.isSupportDeviceChallenge === true ||
+      m.isSupportSedentary === true || m.isDrink === true
   }
 
   private syncAllHealth(): void {
@@ -857,6 +870,16 @@ struct HomePage {
     this.muslimCountText = this.latestValue(this.muslimCountRecords)
   }
 
+  /** 赞念计数实时上报推送: 刷新卡片文本并累积实时记录。 */
+  private receiveMuslimCountPush(item: MuslimCountItemBean): void {
+    this.muslimCountText = `${item.count} 次`
+    const record: HealthDisplayRecord = {
+      value: `${item.count} 次`, summary: '赞念实时',
+      time: this.formatRecordTime(item.timestamp), timestamp: item.timestamp
+    }
+    this.muslimCountRecords = this.sortRecords([record, ...this.muslimCountRecords]).slice(0, 100)
+  }
+
   private sortRecords(records: Array<HealthDisplayRecord>): Array<HealthDisplayRecord> {
     return records.sort((first: HealthDisplayRecord, second: HealthDisplayRecord) => second.timestamp - first.timestamp)
   }
@@ -1013,9 +1036,14 @@ struct HomePage {
   private subscribeDevicePush(): void {
     if (this.pushUnsub) return
     this.pushUnsub = RwBleSdk.subscribePush((data: PushData) => {
-      if (data.type !== DevicePushType.POWER) return
-      const power = data.value as PowerBean
-      this.powerText = `${power.power}% · ${power.powerStatus === 1 ? '充电中' : '未充电'}`
+      if (data.type === DevicePushType.POWER) {
+        const power = data.value as PowerBean
+        this.powerText = `${power.power}% · ${power.powerStatus === 1 ? '充电中' : '未充电'}`
+        return
+      }
+      if (data.type === DevicePushType.MUSLIM_COUNT) {
+        this.receiveMuslimCountPush(data.value as MuslimCountItemBean)
+      }
     })
   }
 
@@ -1023,6 +1051,17 @@ struct HomePage {
     if (!this.connected) { this.showToast('请先连接设备'); return }
     RwBleSdk.controlFindDevice()
     this.showToast('查找指令已发送')
+  }
+
+  /** 设备身份认证：与 Android/iOS Demo 一致使用固定测试向量，正式接入请使用云端下发的随机挑战值。 */
+  private async runDeviceChallenge(): Promise<void> {
+    if (!this.connected) { this.showToast('请先连接设备'); return }
+    try {
+      const response = await RwBleSdk.deviceChallenge('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f')
+      this.showToast(`应答 ${response.substring(0, 16)}…(64 hex，交云端比对)`)
+    } catch (e) {
+      this.showToast(`身份认证失败: ${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   private async openFeatureMenu(id: string, title: string): Promise<void> {

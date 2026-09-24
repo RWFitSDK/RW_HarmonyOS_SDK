@@ -34,6 +34,8 @@ export class DeviceSettingService {
       case 'fallDetect':
       case 'rememberSwitch': return ['关闭', '开启']
       case 'muslimTimeMode': return ['唤醒先显示时间', '不显示时间', '休眠 10 分钟后显示']
+      case 'sedentary':
+      case 'drink': return ['关闭', '每 30 分钟', '每 60 分钟', '每 90 分钟', '每 120 分钟']
       default: return []
     }
   }
@@ -58,6 +60,8 @@ export class DeviceSettingService {
       case 'fallDetect':
       case 'rememberSwitch': return 1
       case 'muslimTimeMode': return 2
+      case 'sedentary':
+      case 'drink': return 2
       default: return 0
     }
   }
@@ -182,6 +186,27 @@ export class DeviceSettingService {
         await RwBleSdk.setFallDetect(enabled ? 1 : 0)
         return enabled ? '跌落检测已开启' : '跌落检测已关闭'
       }
+      case 'sedentary':
+      case 'drink': {
+        const durations: Array<number> = [0, 30, 60, 90, 120]
+        const duration = durations[index] ?? 60
+        const bean: DrinkReminderBean = {
+          isOpen: duration > 0,
+          remindDuration: duration > 0 ? duration : 60,
+          startHour: id === 'sedentary' ? 9 : 8,
+          startMin: 0,
+          endHour: id === 'sedentary' ? 18 : 22,
+          endMin: 0
+        }
+        if (id === 'sedentary') {
+          await RwBleSdk.setSedentaryRemind(bean)
+        } else {
+          await RwBleSdk.setDrinkRemind(bean)
+        }
+        return duration > 0
+          ? `${id === 'sedentary' ? '久坐' : '喝水'}提醒已开启，每 ${duration} 分钟`
+          : `${id === 'sedentary' ? '久坐' : '喝水'}提醒已关闭`
+      }
       case 'rememberSwitch': {
         const enabled = index === 1
         await RwBleSdk.setMuslimCountSwitch(enabled ? 1 : 0)
@@ -217,6 +242,14 @@ export class DeviceSettingService {
       case 'screenControl': return await RwBleSdk.getScreenOn() ? '当前亮屏' : '当前息屏'
       case 'measureUnit': return (await RwBleSdk.getMeasureUnit()) === 1 ? '当前为英制' : '当前为公制'
       case 'fallDetect': return (await RwBleSdk.getFallDetect()) === 1 ? '已开启' : '已关闭'
+      case 'sedentary': {
+        const bean = await RwBleSdk.getSedentaryRemind()
+        return DeviceSettingService.reminderLabel('久坐', bean)
+      }
+      case 'drink': {
+        const bean = await RwBleSdk.getDrinkRemind()
+        return DeviceSettingService.reminderLabel('喝水', bean)
+      }
       case 'rememberSwitch': return (await RwBleSdk.getMuslimCountSwitch()) === 1 ? '已开启' : '已关闭'
       case 'muslimTimeMode': return `模式 ${await RwBleSdk.getMuslimTimeDisplayMode()}`
       default: throw new Error('此功能没有可读取的配置')
@@ -244,6 +277,12 @@ export class DeviceSettingService {
 
   private static twoDigits(value: number): string {
     return value < 10 ? `0${value}` : `${value}`
+  }
+
+  private static reminderLabel(name: string, bean: DrinkReminderBean): string {
+    if (!bean.isOpen) return `${name}提醒已关闭`
+    return `${name}提醒 ${DeviceSettingService.twoDigits(bean.startHour)}:${DeviceSettingService.twoDigits(bean.startMin)}` +
+      `–${DeviceSettingService.twoDigits(bean.endHour)}:${DeviceSettingService.twoDigits(bean.endMin)} / 每 ${bean.remindDuration} 分钟`
   }
 
   private static monitoringBean(interval: number): DrinkReminderBean {

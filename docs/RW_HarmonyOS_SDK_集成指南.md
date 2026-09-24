@@ -251,7 +251,7 @@ function normalize(value?: string): string {
 
 >  [!IMPORTANT]
 >
-> 因设备型号多, 支持的功能不同,所以引入功能表信息,可查询设备功能支持情况. 具体参考 SupportMenuBean 类. 可根据业务自行保存功能表内容. 
+> 因设备型号多, 支持的功能不同,所以引入功能表信息,可查询设备功能支持情况. 具体参考 SupportMenuBean 类. 可根据业务自行保存功能表内容.
 
 `onRingDidFunctionMenu(menu: SupportMenuBean)`
 
@@ -315,7 +315,7 @@ SupportMenuBean 属性定义:
 
 > 获取SDK版本号.
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.getSDKVersion(): string`
 
@@ -329,7 +329,7 @@ console.log(RwBleSdk.getSDKVersion())
 
 > 用户信息设置与计步卡路里,距离有关; 设备初始化时性别为1, 年龄 18, 身高170cm, 体重 65 kg.
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.setUserInfo(person: PersonBean): Promise<void>`
 
@@ -678,7 +678,7 @@ await RwBleSdk.deleteAllAlarmRemind()
 
 > 配置表属性: `isSupportMotoVibrationLevel`
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.setVibrationCount(level: number, count: number): Promise<void>`
 
@@ -708,7 +708,7 @@ console.log(`震动次数: ${vibration.count}`)
 
 >  配置表属性: `isBrightScreenSleepTime`
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.setRingBrightScreenSleepTime(bean: BrightScreenTimeBean): Promise<void>`
 
@@ -749,7 +749,7 @@ console.log(`睡眠模式: ${sleepTime.isOpen} ${sleepTime.startHour}:${sleepTim
 
 >  APP主动向设备推送消息通知(非ANCS), 消息开关由APP自行控制.
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.setPushMsg(msg: MsgPushBean): void`
 
@@ -823,7 +823,7 @@ unsub()
 
 >  配置表属性: `isRememberSwitch`
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.setMuslimCountSwitch(status: number): Promise<void>`
 
@@ -852,7 +852,7 @@ console.log(`赞念开关: ${status === 1 ? '开' : '关'}`)
 
 >  配置表属性: `isSupportHrReminder`
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.getHrAlert(): Promise<HrAlertBean>`
 
@@ -903,7 +903,7 @@ const unsub = RwBleSdk.onHrBoAlertEvent((value) => {
 
 >  配置表属性: `isBrightScreenTime`
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.getBrightScreenTime(): Promise<BrightScreenTimeBean>`
 
@@ -932,7 +932,7 @@ console.log(`亮屏时长: ${(bright as BrightScreenTimeBean).timeSecond}s`)
 
 >  配置表属性: `isRaiseBrightScreen`
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.getRaiseBrightScreen(): Promise<BrightScreenBean>`
 
@@ -971,7 +971,7 @@ console.log(`抬腕亮屏: ${raise.isOpen}`)
 
 >  带屏显示时间的设备才有效.
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.setTimeFormat(type: number): Promise<void>`
 
@@ -1018,31 +1018,68 @@ console.log(`闹钟震动次数: ${count}`)
 
 
 
-##### 3.2.1.21 触摸事件通知
+##### 3.2.1.21 设备主动推送监听
 
-> 设备触摸事件通知, 设备主动上报.
+> 设备主动上报的统一监听通道: 电量推送、录音状态推送、触摸/跌落事件等设备主动事件
+> 都经 `subscribePush` 分发, 按 `PushData.type` 区分数据。
+>
+> 回调在 BLE 线程同步执行, 请勿执行耗时操作, 更新 UI 请切换到主线程。
 
 方法说明:
 
-`RwBleSdk.onTouchEvent(cb: (value: TouchEventBean) => void): () => void`
+`RwBleSdk.subscribePush(cb: (data: PushData) => void): () => void`
 
-返回值说明:
+PushData 结构:
+
+| 字段      | 类型           | 说明                                  |
+| --------- | -------------- | ------------------------------------- |
+| type      | DevicePushType | 推送类型, 见类型说明表                |
+| value     | Object         | 对应类型解析后的业务对象              |
+| timestamp | number         | SDK 收到推送的 Unix 毫秒时间戳        |
+
+DevicePushType 说明:
+
+| 类型           | value 类型       | 说明                                                       |
+| -------------- | ---------------- | ---------------------------------------------------------- |
+| POWER          | PowerBean        | 电量与充电状态推送, 见 [3.2.1.4.1](#32141-实时电量监听)     |
+| RECORD_STATUS  | RecordStatusBean | 录音状态推送, 见 [3.2.6](#326-录音功能)                      |
+| TOUCH_EVENT    | TouchEventBean   | 触摸/跌落事件(协议2.2.7), 见下方字段说明                     |
+| MUSLIM_COUNT   | MuslimCountItemBean | 赞念计数实时上报(设备按键计数主动上报), 字段: timestamp(Unix秒)/count |
+
+TouchEventBean(触摸事件)字段说明:
 
 | 字段      | 说明     | 值                                                    |
 | --------- | -------- | ----------------------------------------------------- |
 | keyType   | 按键类型 | 1: 触摸按键(默认), 2: 跌落(需开启跌落提醒3.2.1.24)    |
 | touchType | 触摸类型 | 1: 单击, 2: 双击, 3: 三击, 4: 长按, 5: 甩动          |
 
-调用示例:
+调用示例(一个监听器按 type 分流):
 
 ```typescript
-const unsub = RwBleSdk.onTouchEvent((value) => {
-  console.log(`触摸事件: ${JSON.stringify(value)}`)
+import { DevicePushType, PushData, TouchEventBean, RecordStatusBean } from 'rw_ble_sdk'
+
+const unsubscribe = RwBleSdk.subscribePush((data: PushData) => {
+  switch (data.type) {
+    case DevicePushType.RECORD_STATUS: {
+      const status = data.value as RecordStatusBean
+      console.log(`录音状态: recording=${status.recording} duration=${status.duration}`)
+      break
+    }
+    case DevicePushType.TOUCH_EVENT: {
+      const event = data.value as TouchEventBean
+      console.log(`触摸事件 keyType=${event.keyType} touchType=${event.touchType}`)
+      break
+    }
+    default:
+      break
+  }
 })
 
-// 不再使用时
-unsub()
+// 不再使用时取消订阅
+unsubscribe()
 ```
+
+> 触摸操作无论熄屏与否都会上报, 由 APP 定义响应行为; 此功能需设备固件定制支持并启用。
 
 
 
@@ -1216,6 +1253,33 @@ RwBleSdk.connectDeviceWithModel(bleDevice)
 
 重置成功后，该密码会自动用于后续正常连接认证。该授权只对下一次连接有效。
 
+###### 3.2.1.26.4 设备身份认证
+
+> 功能配置表属性: `isSupportDeviceChallenge`。仅支持该能力的设备可使用。
+
+透传云端下发的挑战值, 返回设备以出厂密钥计算的 HMAC-SHA256 应答; 应答校验由 APP 与云端完成, SDK 不做比对。
+
+`RwBleSdk.deviceChallenge(challengeHex: string): Promise<string>`
+
+参数说明:
+
+| 参数          | 类型   | 说明                                                       |
+| ------------- | ------ | ---------------------------------------------------------- |
+| challengeHex  | string | 云端生成的挑战值, 64个hex字符(32字节), 兼容空格/冒号/横线分隔 |
+
+返回说明:
+
+- 正常返回时为设备应答的 64 位 hex 字符串(32 字节)。
+
+调用示例:
+
+```typescript
+// 调试用固定测试向量；正式接入请使用云端下发的随机挑战值
+const response = await RwBleSdk.deviceChallenge('000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f')
+// 与云端计算的 HMAC-SHA256 比对
+console.log(`device response: ${response}`)
+```
+
 ##### 3.2.1.27 即时屏幕控制
 
 > 配置表属性: `isSupportScreenControl`
@@ -1271,21 +1335,43 @@ const type = await RwBleSdk.getMeasureUnit()
 console.log(`当前单位=${type}`)
 ```
 
-##### 3.2.1.29 修改设备蓝牙名称
+##### 3.2.1.29 久坐提醒设置与获取
 
-> 功能配置表属性：`isSetBTName`。仅支持该能力的设备可使用。
+> 配置表属性: `isSupportSedentary`
 
-方法说明:
+`RwBleSdk.setSedentaryRemind(bean: DrinkReminderBean): Promise<void>`
 
-`RwBleSdk.setRingBtName(btName: string): Promise<void>`
+`RwBleSdk.getSedentaryRemind(): Promise<DrinkReminderBean>`
 
-`btName` 最多发送 24 字节 UTF-8 数据，超出部分由 SDK 自动截断。
+DrinkReminderBean 参数说明:
+
+| 字段          | 类型     | 说明                                                    |
+| ------------- | -------- | ------------------------------------------------------- |
+| isOpen        | boolean  | 开关                                                    |
+| startHour/min | number   | 起始时段                                                |
+| endHour/min   | number   | 结束时段                                                |
+| remindDuration | number | 提醒间隔, 单位分钟                                      |
+| repeatModel   | number[]（读取返回） | 重复日 bit0=周日…bit6=周六, 设置帧固定每天 |
 
 调用示例:
 
 ```typescript
-await RwBleSdk.setRingBtName('My Ring')
+await RwBleSdk.setSedentaryRemind({
+  isOpen: true, remindDuration: 60,
+  startHour: 9, startMin: 0, endHour: 18, endMin: 0
+})
+
+const bean = await RwBleSdk.getSedentaryRemind()
+console.log(`久坐提醒: ${bean.isOpen ? '开' : '关'} 每 ${bean.remindDuration} 分钟`)
 ```
+
+##### 3.2.1.30 喝水提醒设置与获取
+
+> 配置表属性: `isDrink`; 参数与返回同 3.2.1.29(共用 `DrinkReminderBean`)。
+
+`RwBleSdk.setDrinkRemind(bean: DrinkReminderBean): Promise<void>`
+
+`RwBleSdk.getDrinkRemind(): Promise<DrinkReminderBean>`
 
 
 
@@ -1299,207 +1385,110 @@ await RwBleSdk.setRingBtName('My Ring')
 
 
 
-##### 3.2.2.1 实时检测-启动与关闭设备健康数据检测
+##### 3.2.2.1 实时检测-单次健康检测 controlOpen
 
-> 启动健康数据检测(心率,血氧,HRV,压力,血糖等).
+> 单次健康检测会话开关(协议2.3.1): 一次调用返回完整测量周期
+> **onStarted(开始确认) → onData(实时值多帧) → onFinished(结束回调, 含失败与超时)**。
+> 重复开始将覆盖前次会话。
 
 > [!CAUTION]
 >
-> 同一时间只能开启一种健康检测类型, 必须等当前检测结束(收到完成回调)或主动关闭后, 才能启动新的检测类型.
+> 同一时间只能开启一种健康检测类型, 必须等当前检测结束(收到 onFinished)或主动停止后, 才能启动新的检测类型.
 
 方法说明:
 
-`RwBleSdk.controlHealthData(healthType: number, start: number | boolean): Promise<void>`
-
-`RwBleSdk.onHealthRealtimeData(cb: (data: HealthDataSyncBean) => void): () => void`
-
-`RwBleSdk.onHealthControlEvent(cb: (value: HealthControlEventBean) => void): () => void`
+`RwBleSdk.controlOpen(type: number, dataType: number, callback: HealthMeasurementCallback): void`
 
 参数说明:
 
-| 参数       | 类型       | 说明         | 值                                                           |
-| ---------- | ---------- | ------------ | ------------------------------------------------------------ |
-| healthType | number | 检测类型（DataType 低字节） | ControlHealthType.HR / BP / TEMPERATURE / BO / HRV / PRESSURE / BLOOD_SUGAR |
-| start      | number \| boolean | 启动/关闭 | true/1: 启动, false/0: 关闭 |
+| 参数     | 类型                        | 说明                                                     |
+| -------- | --------------------------- | -------------------------------------------------------- |
+| type     | number                      | 0: 停止 / 1: 开始                                        |
+| dataType | number                      | 检测类型全值, 如 0x0503 心率                              |
+| callback | HealthMeasurementCallback   | onStarted / onData(HealthRealtimeValue) / onFinished(HealthMeasurementResult) |
 
-> [!CAUTION]
->
-> `controlHealthData` 的 `healthType` 必须使用 `ControlHealthType`。`HealthType` 用于识别实时推送数据，两者不能混用。
+HealthRealtimeValue 说明:
+
+| 字段       | 类型   | 说明                                                                                     |
+| ---------- | ------ | ---------------------------------------------------------------------------------------- |
+| dataType   | number | 检测类型全值, 如 0x0503 心率                                                              |
+| timestamp  | number | 采样时间戳, Unix 秒                                                                       |
+| value      | number | 主值: 心率bpm / 血氧% / HRV ms / 压力 / 血糖mmol/L / 体温℃ / 血压-收缩压mmHg / 计步 |
+| extraValue | number | 附加值: 血压-舒张压mmHg; 其它类型为 0                                                      |
+
+HealthMeasurementResult 说明:
+
+| 字段      | 类型    | 说明                            |
+| --------- | ------- | ------------------------------- |
+| dataType  | number  | 检测类型全值                     |
+| success   | boolean | 是否正常结束(设备结束帧)         |
+| errorCode | number  | 失败码: -1 指令失败/断连, -2 超时 |
 
 调用示例:
 
 ```typescript
-import { HealthType, ControlHealthType } from 'rw_ble_sdk'
-
-// 订阅实时健康数据（推送 dataType 用 HealthType）
-const unsub = RwBleSdk.onHealthRealtimeData((data) => {
-  switch (data.dataType) {
-    case HealthType.HR:
-      console.log(`心率: ${data.hrValue}`)
-      break
-    case HealthType.BO:
-      console.log(`血氧: ${data.boValue}`)
-      break
-    case HealthType.HRV:
-      console.log(`HRV: ${data.hrvValue}`)
-      break
-    case HealthType.PRESSURE:
-      console.log(`压力: ${data.pressureValue}`)
-      break
-    case HealthType.BLOOD_SUGAR:
-      console.log(`血糖: ${data.bloodSugarValue}`)
-      break
-    case HealthType.BP:
-      console.log(`血压: ${data.bpSp}/${data.bpDp}`)
-      break
-    case HealthType.TEMPERATURE:
-      console.log(`体温: ${data.temperature}℃`)
-      break
-  }
+// 开始心率单次检测(0x0503), 完整周期经回调返回
+RwBleSdk.controlOpen(1, 0x0503, {
+  onStarted: () => console.log('开始测量'),
+  onData: (value) => console.log(`实时心率=${value.value}`),
+  onFinished: (result) => console.log(`结束 dataType=${result.dataType} success=${result.success}`)
 })
 
-const unsubControl = RwBleSdk.onHealthControlEvent((value) => {
-  // 设备健康检测控制状态上报
-  console.log(`健康检测状态: ${JSON.stringify(value)}`)
-})
-
-// 启动心率检测（控制指令用 ControlHealthType）
-await RwBleSdk.controlHealthData(ControlHealthType.HR, true)
-
-// 关闭心率检测
-await RwBleSdk.controlHealthData(ControlHealthType.HR, false)
-unsub()
-unsubControl()
+// 中途停止: 经开始会话的 onFinished 收尾
+RwBleSdk.controlOpen(0, 0x0503, { onStarted: () => {}, onData: () => {}, onFinished: (r) => console.log(`已停止 ${r.success}`) })
 ```
 
-HealthControlEventBean 说明:
-
-| 字段       | 类型   | 说明                                                         |
-| ---------- | ------ | ------------------------------------------------------------ |
-| healthType | number | 检测类型，回显控制指令的 DataType 低字节（同 `ControlHealthType`） |
-| status     | number | `0`: 检测结束/已停止, `1`: 检测开始。检测完成时设备会上报 `status=0` |
-
-HealthDataSyncBean 说明:
-
-| 字段            | 类型   | 说明                                           |
-| --------------- | ------ | ---------------------------------------------- |
-| dataType        | number | 健康数据类型，对应 `HealthType`                |
-| value           | number（可选） | 通用值，部分数据类型会同时填充具体字段         |
-| value2          | number（可选） | 通用第二值，如血压舒张压等                     |
-| timestamp       | number（可选） | 数据时间戳，秒(s)                              |
-| date            | string（可选） | 日期，yyyy-MM-dd                               |
-| hour            | string（可选） | 小时，HH                                       |
-| hrValue         | number（可选） | 心率值                                         |
-| boValue         | number（可选） | 血氧值                                         |
-| hrvValue        | number（可选） | HRV值                                          |
-| pressureValue   | number（可选） | 压力值                                         |
-| bloodSugarValue | number（可选） | 血糖值                                         |
-| bpSp            | number（可选） | 收缩压                                         |
-| bpDp            | number（可选） | 舒张压                                         |
-| tempValue       | number（可选） | 体温原始值                                     |
-| temperature     | number（可选） | 体温实际值                                     |
-| steps           | number（可选） | 实时活动步数                                   |
-| calorie         | number（可选） | 实时活动卡路里                                 |
-| distance        | number（可选） | 实时活动距离                                   |
-| muslimCount     | number（可选） | 赞念实时计数                                   |
-| hrPartData      | HrPartData[]（可选） | 本次通知中的全部心率/HRV记录             |
-| boPartData      | BoPartData[]（可选） | 本次通知中的全部血氧记录                  |
-| bpPartData      | BpPartData[]（可选） | 本次通知中的全部血压记录                  |
-| tempPartData    | TempPartData[]（可选） | 本次通知中的全部体温/血糖记录            |
-| pressurePartData | PressurePartData[]（可选） | 本次通知中的全部压力记录             |
-| stepJLPartData  | HistoryStepSyncBean[]（可选） | 本次通知中的全部实时活动记录       |
-| muslimCountPartData | MuslimCountItemBean（可选） | 本次通知中的赞念记录 |
-
-单值字段（如 `hrValue`、`timestamp`）保存本次通知最后一条记录；批量记录请优先读取对应的 `*PartData` 数组。
 
 
+##### 3.2.2.2 全天检测-设置健康数据全天监听
 
-##### 3.2.2.2 全天检测-设置健康数据全天监听间隔
-
-> 设置健康数据全天监听间隔，单位分钟.
+> 按 `HealthMonitorType` 统一设置与查询全天检测(心率/血氧/HRV/压力/血糖/血压/体温/PPG 共8类)。
 >
-> **注意:暂间隔只有心率可设置30分钟与60分钟, 其它(血氧,HRV,压力,血糖)只能设置开与关; 开始与结束时间固定全天,不可修改.**
+> **注意: 暂时间隔只有心率与体温可设置30/60分钟, 其它类型固定60分钟只能开关; 开始与结束时间固定全天, 不可修改.**
 
-###### 3.2.2.2.1 心率检测设置与获取
+方法说明:
 
-方法说明: 
+`RwBleSdk.setHealthMonitor(type: HealthMonitorType, bean: HealthMonitorBean): Promise<void>`
 
-`RwBleSdk.setTimedHeartRate(bean: DrinkReminderBean): Promise<void>`
+`RwBleSdk.getHealthMonitor(type: HealthMonitorType): Promise<HealthMonitorBean>`
 
-`RwBleSdk.getTimedHeartRate(): Promise<DrinkReminderBean>`
+HealthMonitorType 说明:
 
-参数说明:
+| 类型             | 检测类型 | 配置表属性                        | 间隔            |
+| ---------------- | -------- | --------------------------------- | --------------- |
+| HEART_RATE       | 心率     | `isHr`                            | 30 或 60 分钟   |
+| BLOOD_OXYGEN     | 血氧     | `isBloodOxy`                      | 固定 60 分钟    |
+| HRV              | 心率变异性 | `isHrv`                         | 固定 60 分钟    |
+| STRESS           | 压力     | `isPressure`                      | 固定 60 分钟    |
+| BLOOD_SUGAR      | 血糖     | `isBloodSugar`                    | 固定 60 分钟    |
+| BLOOD_PRESSURE   | 血压     | `isBloodPress`                    | 固定 60 分钟    |
+| BODY_TEMPERATURE | 体温     | `isSupportTemperatureMonitoring`  | 30 或 60 分钟   |
+| PPG              | PPG      | `isSupportPPGMonitoring`          | -               |
 
-| 参数         | 类型              | 说明 | 值                                                           |
-| ------------ | ----------------- | ---- | ------------------------------------------------------------ |
-| reminderBean | DrinkReminderBean | 类   | isOpen: true开/false关<br>remindDuration: 间隔时间30或60分钟<br>startHour: 固定为0<br>startMin: 固定为0<br>endHour: 固定为23<br>endMin: 固定为59 |
+HealthMonitorBean 参数说明:
+
+| 参数           | 类型    | 说明                                                   |
+| -------------- | ------- | ------------------------------------------------------ |
+| isOpen         | boolean | true 开 / false 关                                     |
+| remindDuration | number  | 间隔时间, 30或60分钟(按上表类型支持)                   |
+| startHour/startMin | number | 固定为 0 / 0                                           |
+| endHour/endMin | number  | 固定为 23 / 59                                         |
+
+`HealthMonitorBean.durationNums`(读取返回)表示设备支持的监测间隔，多个值以下划线分隔，例如 `30_60`。
 
 调用示例:
 
 ```typescript
-// 设置心率监听
-await RwBleSdk.setTimedHeartRate({
-  isOpen: true,
-  remindDuration: 60,
-  startHour: 0, startMin: 0, endHour: 23, endMin: 59
-})
+import { HealthMonitorType } from 'rw_ble_sdk'
+
+// 设置心率全天监测
+await RwBleSdk.setHealthMonitor(HealthMonitorType.HEART_RATE,
+  { isOpen: true, remindDuration: 60, startHour: 0, startMin: 0, endHour: 23, endMin: 59 })
 
 // 获取
-const hr = await RwBleSdk.getTimedHeartRate()
-console.log(`心率监听: ${hr.isOpen} 间隔${hr.remindDuration}分钟`)
+const bean = await RwBleSdk.getHealthMonitor(HealthMonitorType.HEART_RATE)
+console.log(`心率全天监测: ${bean.isOpen ? '开' : '关'} 间隔 ${bean.remindDuration} 分钟`)
 ```
-
-`DrinkReminderBean.durationNums` 表示设备支持的监测间隔，多个值以下划线分隔，例如 `30_60`。
-
-###### 3.2.2.2.2 血氧检测设置与获取
-
-> 配置表属性: `isBloodOxy`; 间隔固定60分钟.
-
-`RwBleSdk.setTimedBloodOxygen(bean: DrinkReminderBean): Promise<void>`
-
-`RwBleSdk.getTimedBloodOxygen(): Promise<DrinkReminderBean>`
-
-###### 3.2.2.2.3 心率变异性(HRV)检测设置与获取
-
-> 配置表属性: `isHrv`; 间隔固定60分钟.
-
-`RwBleSdk.setTimedHRV(bean: DrinkReminderBean): Promise<void>`
-
-`RwBleSdk.getTimedHRV(): Promise<DrinkReminderBean>`
-
-###### 3.2.2.2.4 压力检测设置与获取
-
-> 配置表属性: `isPressure`; 间隔固定60分钟.
-
-`RwBleSdk.setTimedStress(bean: DrinkReminderBean): Promise<void>`
-
-`RwBleSdk.getTimedStress(): Promise<DrinkReminderBean>`
-
-###### 3.2.2.2.5 血糖检测设置与获取
-
-> 配置表属性: `isBloodSugar`; 间隔固定60分钟.
-
-`RwBleSdk.setTimedBloodSugar(bean: DrinkReminderBean): Promise<void>`
-
-`RwBleSdk.getTimedBloodSugar(): Promise<DrinkReminderBean>`
-
-###### 3.2.2.2.6 血压检测设置与获取
-
-> 配置表属性: `isBloodPress`; 间隔固定60分钟.
-
-`RwBleSdk.setTimedBloodPressure(bean: DrinkReminderBean): Promise<void>`
-
-`RwBleSdk.getTimedBloodPressure(): Promise<DrinkReminderBean>`
-
-###### 3.2.2.2.7 体温检测设置与获取
-
-> 配置表属性: `isSupportTemperatureMonitoring`; 间隔可设置30或60分钟.
-
-`RwBleSdk.setTimedBodyTemperature(bean: DrinkReminderBean): Promise<void>`
-
-`RwBleSdk.getTimedBodyTemperature(): Promise<DrinkReminderBean>`
-
-> 以上 3.2.2.2.2 ~ 3.2.2.2.7 用法与心率一致，仅方法名不同.
 
 
 
@@ -1795,7 +1784,7 @@ RwBleSdk.ringOtaWithFileData(otaFilePath, {
 
 > 获取设备是否在多运动中; 当前不在运动中时才开启新的运动.
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.getSportStatus(): Promise<NewSportBean>`
 
@@ -1830,7 +1819,7 @@ if (sport.status === WORKOUT_BEGIN || sport.status === WORKOUT_CONTINUE) {
 
 ##### 3.2.4.2 控制设备进入多运动
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.controlSport(sportType: number, status: number): Promise<void>`
 
@@ -1879,7 +1868,7 @@ unsubControl()
 
 ##### 3.2.4.3 控制开启/关闭设备实时通知运动数据
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.setExerciseNotify(enable: number | boolean): Promise<void>`
 
@@ -1894,7 +1883,7 @@ await RwBleSdk.setExerciseNotify(false)
 
 ##### 3.2.4.4 获取多运动数据报告
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.getSportResult(): Promise<SportResultBean[]>`
 
@@ -1968,19 +1957,13 @@ PPG/ACC/PPG Red/IR历史采集的 `sensorType` 合法组合:
 
 ##### 3.2.5.0 PPG定时监测
 
-> 配置表属性: `isSupportPPGMonitoring`
-
-`RwBleSdk.setTimedPPG(bean: DrinkReminderBean): Promise<void>`
-
-`RwBleSdk.getTimedPPG(): Promise<DrinkReminderBean>`
-
-> 用法同心率定时监测(3.2.2.2.1)一致.
+> 配置表属性: `isSupportPPGMonitoring`; 统一走 [3.2.2.2 全天检测](#3222-全天检测-设置健康数据全天监听) 的 `setHealthMonitor(HealthMonitorType.PPG, bean)` / `getHealthMonitor(HealthMonitorType.PPG)`.
 
 ##### 3.2.5.1 启动与关闭传感器原始数据
 
 > 本接口仅用于控制PPG/ACC/PPG Red/IR历史原始数据采集, 睡眠实时数据无需调用此接口.
 
-方法说明: 
+方法说明:
 
 `RwBleSdk.controlSensorRaw(outputType: number, sensorType: number): Promise<void>`
 
@@ -2085,12 +2068,97 @@ unsubscribe()
 
 
 
+#### 3.2.6 录音功能
+
+> 功能配置表属性: `isSupportRecording`。仅支持该能力的设备可使用。
+
+调用示例:
+
+```typescript
+const status = await RwBleSdk.getRecordStatus()
+console.log(`录音中=${status.recording} 已录 ${status.duration} 秒`)
+
+const files = await RwBleSdk.getRecordFileList()
+if (files.length > 0) {
+  const bean = await RwBleSdk.transferRecordFile(files[0].fileId,
+    (p) => console.log(`下载进度 ${(p.progress * 100).toFixed(0)}%`))
+  console.log(`完成 ${bean.fileSize} 字节`)
+}
+```
+
+##### 3.2.6.1 开始/停止录音
+
+`RwBleSdk.recordControl(start: boolean): Promise<void>`
+
+##### 3.2.6.2 查询录音状态
+
+`RwBleSdk.getRecordStatus(): Promise<RecordStatusBean>`
+
+RecordStatusBean 参数说明:
+
+| 字段              | 类型    | 说明                                       |
+| ----------------- | ------- | ------------------------------------------ |
+| recording         | boolean | 是否录音中                                 |
+| startTime         | number  | 本次录音开始时间, Unix 秒; 未录音时为 0    |
+| duration          | number  | 录音时长, 单位秒                           |
+| totalCapacity     | number  | 录音区总容量                               |
+| remainingCapacity | number  | 录音区剩余容量                             |
+
+> 录音状态变化也会经设备主动推送上报: `subscribePush` 的 `data.type === DevicePushType.RECORD_STATUS`(见 [3.2.1.21](#32121-设备主动推送监听)), `data.value` 为 `RecordStatusBean`。
+
+##### 3.2.6.3 获取录音文件列表
+
+`RwBleSdk.getRecordFileList(): Promise<RecordFileItemBean[]>`
+
+RecordFileItemBean 参数说明:
+
+| 字段      | 类型   | 说明                                        |
+| --------- | ------ | ------------------------------------------- |
+| fileId    | number | 文件 ID, 下载/删除时使用                    |
+| fileSize  | number | 文件大小, 单位字节                          |
+| duration  | number | 录音时长, 单位秒                            |
+| timestamp | number | 录音时间, Unix 秒, SDK 已完成转换           |
+
+##### 3.2.6.4 下载录音文件
+
+进度经 `onProgress` 多帧返回, 完成后返回完整文件数据。
+
+`RwBleSdk.transferRecordFile(fileId: number, onProgress?: (bean: RecordFileTransferBean) => void): Promise<RecordFileTransferBean>`
+
+RecordFileTransferBean 参数说明:
+
+| 字段     | 类型   | 说明                                   |
+| -------- | ------ | -------------------------------------- |
+| fileId   | number | 来自文件列表的文件 ID                  |
+| progress | number | 0~1                                    |
+| received | number | 已接收字节                             |
+| complete | boolean | 是否完成帧                             |
+| fileData | Uint8Array（完成帧） | 完整录音文件数据         |
+
+##### 3.2.6.5 删除录音文件
+
+`RwBleSdk.deleteRecordFile(fileId: number): Promise<void>`
+
+##### 3.2.6.6 格式化录音区
+
+`RwBleSdk.formatRecordStorage(): Promise<void>`
+
+
 ## SDK修订记录
+
+**v2.0.0_20260922** (2026.09.22)
+
+- 添加录音功能接口(3.2.6), 功能配置表添加`isSupportRecording`
+- 添加设备身份认证接口(3.2.1.26.4), 功能配置表添加`isSupportDeviceChallenge`
+- 添加久坐提醒设置与获取接口(3.2.1.29), 功能配置表添加`isSupportSedentary`
+- 添加喝水提醒设置与获取接口(3.2.1.30), 功能配置表添加`isDrink`
+- 添加健康监测统一设置接口 `setHealthMonitor`/`getHealthMonitor`(3.2.2.2.8)与单次检测会话 `controlOpen`(3.2.2.1.1); 老接口保留可用
+- 设备主动推送新增录音状态 `RECORD_STATUS` 与触摸/跌落事件 `TOUCH_EVENT` 类型
 
 **v2.0.0_20260909** (2026.09.09)
 - 添加公制/英制单位设置与获取接口(3.2.1.28)
 - 电量数据新增充电状态及实时电量监听(3.2.1.4)
-- 完善定时监测间隔返回，新增设备蓝牙名称设置接口(3.2.1.29)
+- 完善定时监测间隔返回，新增设备蓝牙名称设置接口
 
 **v2.0.0_20260820** (2026.08.20)
 - 添加即时屏幕控制功能(3.2.1.27)
