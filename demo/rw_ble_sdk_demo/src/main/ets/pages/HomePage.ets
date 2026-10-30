@@ -23,10 +23,13 @@ import {
   RwBleSdk,
   SleepSyncBean,
   StepSyncBean,
-  SupportMenuBean
+  SupportMenuBean,
+  TouchEventBean
 } from 'rw_ble_sdk';
 import { SavedDeviceStore } from '../model/SavedDeviceStore';
 import { DeviceSettingService } from '../model/DeviceSettingService';
+import { DevicePresentation } from '../model/DevicePresentation';
+import { SettingInputDialog } from '../components/SettingInputDialog';
 
 interface HealthDisplayRecord {
   value: string
@@ -62,8 +65,15 @@ struct HomePage {
   @State private bloodSugarText: string = '暂无数据'
   @State private temperatureText: string = '暂无数据'
   @State private muslimCountText: string = '暂无数据'
+  @State private ppgSampleRateText: string = ''
+  @State private customerModelText: string = ''
+  @State private countControlText: string = ''
+  @State private customNumberText: string = ''
 
   private initialized: boolean = false
+  private pageActive: boolean = false
+  private inputDialog: CustomDialogController | null = null
+  private inputBusy: boolean = false
   private pushUnsub: (() => void) | null = null
   private powerRequest: Promise<PowerBean> | null = null
   private syncedStepDays: Array<StepSyncBean> = []
@@ -83,15 +93,26 @@ struct HomePage {
   }
 
   aboutToAppear(): void {
+    this.pageActive = true
     this.subscribeDevicePush()
     this.initPage()
   }
 
   onPageShow(): void {
+    this.pageActive = true
+    this.subscribeDevicePush()
     this.refreshPageState()
   }
 
+  onPageHide(): void {
+    this.pageActive = false
+    this.inputDialog?.close()
+  }
+
   aboutToDisappear(): void {
+    this.pageActive = false
+    this.inputDialog?.close()
+    this.inputDialog = null
     this.pushUnsub?.()
     this.pushUnsub = null
   }
@@ -112,12 +133,14 @@ struct HomePage {
       onRingConnectFailed: (reason: string) => {
         this.connecting = false
         this.connected = false
+        this.clearNewSettingValues()
         this.showToast(`连接失败: ${reason}`)
       },
       onRingDisconnected: (_reason: string) => {
         this.connecting = false
         this.connected = false
         this.menu = null
+        this.clearNewSettingValues()
         this.deviceName = this.savedDevice?.name ?? '已断开'
         this.showToast('设备已断开')
       },
@@ -134,7 +157,9 @@ struct HomePage {
             uuid: menuBean.uuid ?? this.savedDevice.uuid,
             rssi: this.savedDevice.rssi,
             brand: this.savedDevice.brand,
-            data: this.savedDevice.data
+            data: this.savedDevice.data,
+            batteryStatus: this.savedDevice.batteryStatus,
+            deviceForm: this.savedDevice.deviceForm
           }
           await SavedDeviceStore.save(this.context(), updated)
           this.savedDevice = updated
@@ -154,6 +179,7 @@ struct HomePage {
     await this.loadSavedDevice()
     this.connected = RwBleSdk.isBleConnected()
     this.menu = RwBleSdk.getSupportMenu()
+    if (!this.connected) this.clearNewSettingValues()
     if (this.savedDevice) this.deviceName = this.savedDevice.name ?? 'RW 智能戒指'
     if (this.connected) this.refreshDeviceInfo()
   }
@@ -367,10 +393,28 @@ struct HomePage {
             if (this.menu?.isSupportVibrationInterval === true) this.SupportedFeatureRow('vibrationInterval', '隔', '震动间隔', '设置每次震动的间隔')
             if (this.menu?.isSupportCountReminder === true) this.SupportedFeatureRow('countReminder', '提', '计数提醒', '设置计数提醒间隔')
             if (this.menu?.isSupportScreenControl === true) this.SupportedFeatureRow('screenControl', '屏', '即时屏幕控制', '立即亮屏或息屏')
+            if (DevicePresentation.supports('vibrationControl', this.menu)) {
+              this.SupportedFeatureRow('vibrationControl', '震', '自定义震动', '单轮 / 持续 / 节奏循环 / 停止')
+            }
+            if (DevicePresentation.supports('customNumber', this.menu)) {
+              this.SupportedFeatureRow('customNumber', '数', '自定义数字显示', '输入数字，在设备上显示')
+            }
+            if (DevicePresentation.supports('countControl', this.menu)) {
+              this.SupportedFeatureRow('countControl', '计', '计数识别', '设置、查询与状态推送')
+            }
+            if (DevicePresentation.supports('ppgSampleRate', this.menu)) {
+              this.SupportedFeatureRow('ppgSampleRate', 'P', 'PPG 采样率', '设置或获取采样率(Hz)')
+            }
+            if (DevicePresentation.supports('customerModel', this.menu)) {
+              this.SupportedFeatureRow('customerModel', '型', '客户型号', '设置或获取客户自定义型号')
+            }
+            if (DevicePresentation.supports('muslimCountClean', this.menu)) {
+              this.SupportedFeatureRow('muslimCountClean', '零', '赞念计数清零', '清零设备当前赞念计数')
+            }
             if (this.menu?.isSupportUnitSetting === true) this.SupportedFeatureRow('measureUnit', '制', '单位设置', '切换公制或英制')
             if (this.menu?.isSupportFallDetect === true) this.SupportedFeatureRow('fallDetect', '落', '跌落提醒', '开启或关闭跌落检测')
             if (this.menu?.isSupportRecording === true) {
-              this.FeatureRow('录', '录音', '开始停止 / 文件列表 / 下载删除 / 格式化', '进入录音页',
+              this.FeatureRow('录', '录音', '普通与实时录音 / 文件列表 / 下载删除', '进入录音页',
                 () => { try { this.getUIContext().getRouter().pushUrl({ url: 'pages/RecordingPage' }) } catch (_e) {} })
               this.DividerLine()
             }
@@ -585,7 +629,7 @@ struct HomePage {
   }
 
   @Builder
-  private FeatureRow(symbol: string, title: string, subtitle: string, value: string, action: () => void) {
+  private FeatureRow(symbol: string, title: string, subtitle: string, value: string, action: () => void, settingId: string = '') {
     Row({ space: 13 }) {
       Text(symbol).fontSize(13).fontWeight(FontWeight.Bold).fontColor('#168662')
         .textAlign(TextAlign.Center).width(40).height(40).backgroundColor('#EDF6F2').borderRadius(12)
@@ -595,7 +639,11 @@ struct HomePage {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
-      if (value.length > 0) Text(value).fontSize(12).fontColor('#0C9568')
+      // 在 Text 的更新作用域内读取 @State，不把动态结果按值传过多层 @Builder。
+      if (value.length > 0 || settingId.length > 0) {
+        Text(this.featureValue(settingId, value)).fontSize(12).fontColor('#0C9568')
+          .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
       Text('›').fontSize(24).fontColor('#BDC5C1')
     }
     .width('100%')
@@ -606,8 +654,18 @@ struct HomePage {
   @Builder
   private SupportedFeatureRow(id: string, symbol: string, title: string, subtitle: string) {
     this.FeatureRow(symbol, title, subtitle, DeviceSettingService.canGet(id) ? '设置 / 获取' : '点击设置',
-      () => this.openFeatureMenu(id, title))
+      () => this.openFeatureMenu(id, title), id)
     this.DividerLine()
+  }
+
+  private featureValue(id: string, fallback: string): string {
+    switch (id) {
+      case 'ppgSampleRate': return this.ppgSampleRateText || fallback
+      case 'customerModel': return this.customerModelText || fallback
+      case 'countControl': return this.countControlText || fallback
+      case 'customNumber': return this.customNumberText || fallback
+      default: return fallback
+    }
   }
 
   @Builder
@@ -663,7 +721,7 @@ struct HomePage {
       m.isSupportFallDetect === true || m.isSupportCountReminder === true || m.isRememberSwitch === true ||
       m.isTakePhoto === true || m.isSupportMuslimTimeDisplayMode === true || m.isSupportScreenControl === true ||
       m.isSupportUnitSetting === true || m.isSupportRecording === true || m.isSupportDeviceChallenge === true ||
-      m.isSupportSedentary === true || m.isDrink === true
+      m.isSupportSedentary === true || m.isDrink === true || DevicePresentation.hasNewSettings(m)
   }
 
   private syncAllHealth(): void {
@@ -982,7 +1040,9 @@ struct HomePage {
       uuid: scanned.uuid ?? scanned.deviceId,
       rssi: scanned.rssi,
       brand: scanned.brand ?? saved.brand,
-      data: scanned.data
+      data: scanned.data,
+      batteryStatus: scanned.batteryStatus,
+      deviceForm: scanned.deviceForm
     }
     await SavedDeviceStore.save(this.context(), refreshed)
     this.savedDevice = refreshed
@@ -1004,14 +1064,19 @@ struct HomePage {
     this.powerText = '--'
     this.modelText = '--'
     this.firmwareText = '--'
+    this.clearNewSettingValues()
   }
 
   private async refreshDeviceInfo(): Promise<void> {
     await this.refreshPower()
+    const deviceId = this.savedDevice?.deviceId ?? ''
     try {
       const result: FirmVersionBean = await RwBleSdk.getFirmwareVersion()
+      if (!this.isCurrentTarget(deviceId)) return
       this.modelText = result.deviceClazz ?? '--'
       this.firmwareText = result.deviceNo ?? '--'
+      // 客户型号不在此处显示: 固件信息未携带该字段时 SDK 会回退为原设备型号,
+      // 已修改过的客户型号只有经 getCustomerModel() 显式查询才能拿到真实值。
     } catch (_e) {}
   }
 
@@ -1043,6 +1108,19 @@ struct HomePage {
       }
       if (data.type === DevicePushType.MUSLIM_COUNT) {
         this.receiveMuslimCountPush(data.value as MuslimCountItemBean)
+        return
+      }
+      if (data.type === DevicePushType.COUNT_CONTROL) {
+        const armed = data.value as boolean
+        this.countControlText = armed ? '已开启(Arm)' : '已关闭(Disarm)'
+        console.info(`[RWSDK Demo] countControl push armed=${armed}`)
+        return
+      }
+      if (data.type === DevicePushType.TOUCH_EVENT) {
+        const event = data.value as TouchEventBean
+        const text = DevicePresentation.touchAction(event.keyType, event.touchType)
+        console.info(`[RWSDK Demo] touch keyType=${event.keyType}, touchType=${event.touchType}, action=${text}`)
+        if (this.pageActive) this.showToast(text)
       }
     })
   }
@@ -1066,6 +1144,10 @@ struct HomePage {
 
   private async openFeatureMenu(id: string, title: string): Promise<void> {
     if (!this.connected) { this.showToast('请先连接设备'); return }
+    if (id === 'muslimCountClean') {
+      this.clearMuslimCount()
+      return
+    }
     if (!DeviceSettingService.canGet(id)) {
       this.openFeaturePicker(id, title)
       return
@@ -1085,6 +1167,10 @@ struct HomePage {
   }
 
   private openFeaturePicker(id: string, title: string): void {
+    if (id === 'ppgSampleRate' || id === 'customerModel' || id === 'customNumber') {
+      this.openInputSetting(id, title)
+      return
+    }
     if (id === 'alarm') {
       const selected = new Date()
       selected.setHours(7, 0, 0, 0)
@@ -1112,8 +1198,14 @@ struct HomePage {
   }
 
   private async setFeatureSelection(id: string, index: number): Promise<void> {
+    if (!this.connected) { this.showToast('请先连接设备'); return }
+    const deviceId = this.savedDevice?.deviceId ?? ''
     try {
-      this.showToast(await DeviceSettingService.setSelected(id, index))
+      const value = await DeviceSettingService.setSelected(id, index)
+      console.info(`[RWSDK Demo] ${id} set result=${value}`)
+      if (!this.isCurrentTarget(deviceId)) return
+      this.updateNewSettingValue(id, value)
+      this.showToast(value)
     } catch (error) {
       this.showToast(`设置失败: ${error instanceof Error ? error.message : JSON.stringify(error)}`)
     }
@@ -1128,8 +1220,15 @@ struct HomePage {
   }
 
   private async getFeature(id: string, title: string): Promise<void> {
+    const deviceId = this.savedDevice?.deviceId ?? ''
     try {
       const value = await DeviceSettingService.get(id)
+      console.info(`[RWSDK Demo] ${id} get result=${value}`)
+      if (!this.isCurrentTarget(deviceId)) return
+      if (id === 'ppgSampleRate' || id === 'customerModel' || id === 'countControl') {
+        this.updateNewSettingValue(id, value)
+        return
+      }
       await this.getUIContext().getPromptAction().showDialog({
         title: `${title}当前值`,
         message: value,
@@ -1137,6 +1236,78 @@ struct HomePage {
       })
     } catch (error) {
       this.showToast(`获取失败: ${error instanceof Error ? error.message : JSON.stringify(error)}`)
+    }
+  }
+
+  private isCurrentTarget(deviceId: string): boolean {
+    return this.pageActive && this.connected && RwBleSdk.isBleConnected() &&
+      (this.savedDevice?.deviceId ?? '') === deviceId
+  }
+
+  private clearNewSettingValues(): void {
+    this.ppgSampleRateText = ''
+    this.customerModelText = ''
+    this.countControlText = ''
+    this.customNumberText = ''
+    this.inputDialog?.close()
+  }
+
+  private updateNewSettingValue(id: string, value: string): void {
+    switch (id) {
+      case 'ppgSampleRate': this.ppgSampleRateText = value; break
+      case 'customerModel': this.customerModelText = value; break
+      case 'countControl': this.countControlText = value; break
+      case 'customNumber': this.customNumberText = value; break
+      default: return
+    }
+    console.info(`[RWSDK Demo] ${id} cell value=${value}`)
+  }
+
+  private openInputSetting(id: string, title: string): void {
+    const deviceId = this.savedDevice?.deviceId ?? ''
+    this.inputDialog?.close()
+    this.inputDialog = new CustomDialogController({
+      builder: SettingInputDialog({
+        title,
+        hint: id === 'customerModel' ? '最多8个英文字母或数字' : (id === 'customNumber' ? '0～9999，例如627' : '采样率(Hz)，例如100或200'),
+        initialValue: id === 'ppgSampleRate' ? '100' : '',
+        numeric: id !== 'customerModel',
+        onConfirm: (text: string): void => { this.setInputSetting(id, text, deviceId) }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.Center
+    })
+    this.inputDialog.open()
+  }
+
+  private async setInputSetting(id: string, text: string, deviceId: string): Promise<void> {
+    if (this.inputBusy || !this.isCurrentTarget(deviceId)) return
+    this.inputBusy = true
+    try {
+      const value = await DeviceSettingService.setInput(id, text)
+      console.info(`[RWSDK Demo] ${id} set/get result=${value}`)
+      if (this.isCurrentTarget(deviceId)) this.updateNewSettingValue(id, value)
+    } catch (e) {
+      if (this.isCurrentTarget(deviceId)) this.showToast(`设置失败: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      this.inputBusy = false
+    }
+  }
+
+  private async clearMuslimCount(): Promise<void> {
+    const deviceId = this.savedDevice?.deviceId ?? ''
+    try {
+      const result = await this.getUIContext().getPromptAction().showDialog({
+        title: '赞念计数清零',
+        message: '确认清零设备当前赞念计数？',
+        buttons: [{ text: '取消', color: '#26312C' }, { text: '清零', color: '#D9483B' }]
+      })
+      if (result.index !== 1 || !this.isCurrentTarget(deviceId)) return
+      await RwBleSdk.setMuslimCountClean()
+      console.info('[RWSDK Demo] setMuslimCountClean success')
+      if (this.isCurrentTarget(deviceId)) this.showToast('赞念计数已清零')
+    } catch (e) {
+      if (this.isCurrentTarget(deviceId)) this.showToast(`清零失败: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 

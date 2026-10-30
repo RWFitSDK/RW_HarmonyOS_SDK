@@ -3,6 +3,7 @@ import { promptAction } from '@kit.ArkUI';
 import { access } from '@kit.ConnectivityKit';
 import { RwBleDevice, RwBleSdk } from 'rw_ble_sdk';
 import { SavedDeviceStore } from '../model/SavedDeviceStore';
+import { DevicePresentation } from '../model/DevicePresentation';
 
 @Entry
 @Component
@@ -91,6 +92,12 @@ struct ScanPage {
                       Column({ space: 4 }) {
                         Text(this.signalText(device.rssi ?? -100)).fontSize(12).fontColor('#46705F')
                         Text(`${device.rssi ?? 0} dBm`).fontSize(10).fontColor('#A0A8A4')
+                        if (DevicePresentation.batteryStatus(device.batteryStatus).length > 0) {
+                          Text(DevicePresentation.batteryStatus(device.batteryStatus)).fontSize(10).fontColor('#46705F')
+                        }
+                        if (DevicePresentation.deviceForm(device.deviceForm).length > 0) {
+                          Text(DevicePresentation.deviceForm(device.deviceForm)).fontSize(10).fontColor('#66736D')
+                        }
                       }
                       if (this.connectingId === device.deviceId) {
                         LoadingProgress().width(24).height(24).color('#0C9B6C')
@@ -122,7 +129,7 @@ struct ScanPage {
                   .backgroundColor('#FFFFFF')
                   .onClick(() => this.connectDevice(device))
                 }
-              }, (device: RwBleDevice) => device.deviceId)
+              }, (device: RwBleDevice) => DevicePresentation.scanRowKey(device))
             }
             .width('100%')
             .backgroundColor('#FFFFFF')

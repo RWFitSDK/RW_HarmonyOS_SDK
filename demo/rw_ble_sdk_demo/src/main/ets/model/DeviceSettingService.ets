@@ -10,7 +10,8 @@ import {
 
 export class DeviceSettingService {
   static canGet(id: string): boolean {
-    return id !== 'findDevice' && id !== 'takePhoto' && id !== 'powerOff'
+    return id !== 'findDevice' && id !== 'takePhoto' && id !== 'powerOff' &&
+      id !== 'vibrationControl' && id !== 'customNumber' && id !== 'muslimCountClean'
   }
 
   static pickerOptions(id: string): Array<string> {
@@ -30,6 +31,8 @@ export class DeviceSettingService {
       case 'vibrationInterval': return ['100 ms', '200 ms', '300 ms', '500 ms', '1000 ms']
       case 'countReminder': return ['关闭', '30 分钟', '60 分钟', '90 分钟', '120 分钟']
       case 'screenControl': return ['立即息屏', '立即亮屏']
+      case 'countControl': return ['关闭计数识别', '开启计数识别']
+      case 'vibrationControl': return ['单轮 · 3次 · 强度2', '持续 · 强度2', '节奏循环 · 强度2', '停止震动']
       case 'measureUnit': return ['公制', '英制']
       case 'fallDetect':
       case 'rememberSwitch': return ['关闭', '开启']
@@ -56,6 +59,7 @@ export class DeviceSettingService {
       case 'vibrationInterval': return 3
       case 'countReminder': return 2
       case 'screenControl': return 1
+      case 'countControl': return 1
       case 'measureUnit': return 0
       case 'fallDetect':
       case 'rememberSwitch': return 1
@@ -181,6 +185,19 @@ export class DeviceSettingService {
         await RwBleSdk.setMeasureUnit(type)
         return type === 1 ? '当前为英制' : '当前为公制'
       }
+      case 'countControl': {
+        await RwBleSdk.setCountControl(index === 1)
+        return DeviceSettingService.get(id)
+      }
+      case 'vibrationControl': {
+        switch (index) {
+          case 0: await RwBleSdk.controlVibration(3, 2, 0, 0, 0); break
+          case 1: await RwBleSdk.controlVibration(255, 2, 0, 0, 0); break
+          case 2: await RwBleSdk.controlVibration(255, 2, 3, 2, 10); break
+          default: await RwBleSdk.controlVibration(255, 0, 0, 0, 0); break
+        }
+        return DeviceSettingService.pickerLabel(id, index)
+      }
       case 'fallDetect': {
         const enabled = index === 1
         await RwBleSdk.setFallDetect(enabled ? 1 : 0)
@@ -240,6 +257,9 @@ export class DeviceSettingService {
       case 'vibrationInterval': return `${await RwBleSdk.getVibrationInterval()} ms`
       case 'countReminder': return `${await RwBleSdk.getCountReminderInterval()} 分钟`
       case 'screenControl': return await RwBleSdk.getScreenOn() ? '当前亮屏' : '当前息屏'
+      case 'countControl': return await RwBleSdk.getCountControl() ? '已开启(Arm)' : '已关闭(Disarm)'
+      case 'ppgSampleRate': return `${await RwBleSdk.getPpgSampleRate()} Hz`
+      case 'customerModel': return (await RwBleSdk.getCustomerModel()) || '未设置'
       case 'measureUnit': return (await RwBleSdk.getMeasureUnit()) === 1 ? '当前为英制' : '当前为公制'
       case 'fallDetect': return (await RwBleSdk.getFallDetect()) === 1 ? '已开启' : '已关闭'
       case 'sedentary': {
@@ -254,6 +274,25 @@ export class DeviceSettingService {
       case 'muslimTimeMode': return `模式 ${await RwBleSdk.getMuslimTimeDisplayMode()}`
       default: throw new Error('此功能没有可读取的配置')
     }
+  }
+
+  static async setInput(id: string, text: string): Promise<string> {
+    if (id === 'customerModel') {
+      await RwBleSdk.setCustomerModel(text)
+      return DeviceSettingService.get(id)
+    }
+    if (text.trim().length === 0 || !Number.isFinite(Number(text))) throw new Error('请输入有效数字')
+    const value = Number(text)
+    if (id === 'ppgSampleRate') {
+      await RwBleSdk.setPpgSampleRate(value)
+      return DeviceSettingService.get(id)
+    }
+    if (id === 'customNumber') {
+      const number = Math.max(0, Math.min(9999, Math.trunc(value)))
+      await RwBleSdk.showCustomNumber(number)
+      return `上次发送：${number}`
+    }
+    throw new Error('未知设置项')
   }
 
   private static monitorType(id: string): string {

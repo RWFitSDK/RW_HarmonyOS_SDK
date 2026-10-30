@@ -138,6 +138,8 @@ SDK 默认只返回符合 SDK 广播数据格式的设备，扫描会在 15 秒�
 | `rssi` | 当前扫描信号强度 |
 | `data` | 原始广播数据 |
 | `uuid` | 同 `deviceId`，兼容旧字段 |
+| `batteryStatus` | 充电状态：`0` 未充电、`1` 充电中、`2` 充满；未提供或不支持时为 `undefined`，需设备固件支持；不是电量百分比 |
+| `deviceForm` | 产品形态：`0` 无屏戒指、`1` 有屏戒指、`2` 无屏手链、`3` 有屏手链、`4` 无屏手环、`5` 有屏手环、`6` 手表；`-1` 未提供或不支持，需设备固件支持 |
 
 ##### 3.1.2 停止搜索
 
@@ -304,6 +306,11 @@ SupportMenuBean 属性定义:
 | isSupportDevicePasswordAuth | 是否支持设备密码认证       |
 | isSupportScreenControl      | 是否支持即时屏幕亮灭控制   |
 | isSupportUnitSetting        | 是否支持公制/英制单位设置  |
+| isSupportVibrationControl   | 是否支持自定义震动控制（3.2.1.31） |
+| isSupportCustomNumberDisplay | 是否支持自定义数字显示（3.2.1.32） |
+| isSupportCountControl       | 是否支持计数识别开关与状态查询（3.2.1.33） |
+| isSupportCustomerModel      | 是否支持客户型号设置与获取（3.2.1.34） |
+| isSupportPpgSampleRate      | 是否支持PPG采样率设置与获取（3.2.5.4） |
 
 
 
@@ -376,6 +383,8 @@ try {
 try {
   const info = await RwBleSdk.getFirmwareVersion()
   console.log(`设备型号: ${info.deviceClazz ?? '-'}`)
+  console.log(`客户型号: ${info.customerModel ?? '-'}`) // 未提供时与设备型号一致
+  console.log(`产品形态: ${info.deviceForm ?? -1}`) // 0无屏戒指..6手表, -1未提供
   console.log(`固件版本: ${info.deviceNo}`)
   console.log(`UI版本: ${info.uiVersion ?? '-'}`)
   console.log(`屏幕: ${info.screenWidth ?? '-'}x${info.screenHeight ?? '-'}`)
@@ -397,6 +406,8 @@ interface FirmVersionBean {
   screenWidth?: number  // 设备宽
   screenHeight?: number // 设备高
   uiVersion?: string    // UI版本号
+  deviceForm?: number   // 产品形态：0无屏戒指、1有屏戒指、2无屏手链、3有屏手链、4无屏手环、5有屏手环、6手表；-1未提供或不支持
+  customerModel?: string // 客户型号；未提供时与原设备型号一致
 }
 ```
 
@@ -531,9 +542,15 @@ await RwBleSdk.setRingWearHand(false) // false左手, true右手
 
 ##### 3.2.1.8 启动与关闭拍照
 
-> 启动拍照功能后,设备可通过手势控制app自定义相机拍照.
+> APP需自行实现相机页面(可使用相机API或第三方相机库), 不能直接拉起手机系统相机实现戒指拍照控制. SDK负责相机模式控制与拍照事件通知, 拍照及保存到手机图库由APP完成.
 >
 > 配置表属性: `isTakePhoto`
+
+使用流程:
+
+1. 进入APP相机页面时, 通过 `RwBleSdk.onTakePhotoEvent()` 订阅拍照事件, 调用 `RwBleSdk.controlTakePhoto(1)` 通知戒指进入相机控制模式.
+2. 用户在戒指上触发拍照手势后, 回调收到 `value=2`; APP调用相机API或相机库拍照, 并将照片保存到手机图库.
+3. 退出相机页面时, 调用 `RwBleSdk.controlTakePhoto(0)` 通知戒指退出相机控制模式, 并调用订阅返回的函数取消监听.
 
 方法说明:
 
@@ -546,8 +563,9 @@ await RwBleSdk.setRingWearHand(false) // false左手, true右手
 ```typescript
 // 订阅设备拍照事件
 const unsub = RwBleSdk.onTakePhotoEvent((value) => {
-  // value 为设备主动上报的拍照事件值
-  console.log(`拍照事件: ${value}`)
+  if (value === 2) {
+    // 调用APP相机API或相机库拍照, 并将照片保存到手机图库
+  }
 })
 
 // 启动拍照模式
@@ -1043,15 +1061,17 @@ DevicePushType 说明:
 | -------------- | ---------------- | ---------------------------------------------------------- |
 | POWER          | PowerBean        | 电量与充电状态推送, 见 [3.2.1.4.1](#32141-实时电量监听)     |
 | RECORD_STATUS  | RecordStatusBean | 录音状态推送, 见 [3.2.6](#326-录音功能)                      |
-| TOUCH_EVENT    | TouchEventBean   | 触摸/跌落事件(协议2.2.7), 见下方字段说明                     |
-| MUSLIM_COUNT   | MuslimCountItemBean | 赞念计数实时上报(设备按键计数主动上报), 字段: timestamp(Unix秒)/count |
+| TOUCH_EVENT    | TouchEventBean   | 触摸/跌落/SOS/连续点击事件，见下方字段说明        |
+| MUSLIM_COUNT   | MuslimCountItemBean | 赞念计数实时上报(设备按键计数主动上报), 字段: timestamp(Unix秒)/count; 一帧多项时逐项上报 |
+| RECORD_REALTIME_DATA | RecordRealtimeDataBean | 实时录音音频：sequence（0-255循环序号）和 audioData（原始Opus压缩数据），见 [3.2.6.7](#3267-实时录音) |
+| COUNT_CONTROL  | boolean          | 计数识别状态变化：true开启(Arm)、false关闭(Disarm)，见 [3.2.1.33](#32133-计数识别开关与状态查询) |
 
 TouchEventBean(触摸事件)字段说明:
 
 | 字段      | 说明     | 值                                                    |
 | --------- | -------- | ----------------------------------------------------- |
-| keyType   | 按键类型 | 1: 触摸按键(默认), 2: 跌落(需开启跌落提醒3.2.1.24)    |
-| touchType | 触摸类型 | 1: 单击, 2: 双击, 3: 三击, 4: 长按, 5: 甩动          |
+| keyType   | 按键类型 | `1` 触摸按键、`2` 跌落（需开启跌落提醒3.2.1.24）、`3` SOS、`4` 连续点击 |
+| touchType | 操作内容 | 触摸时：`1` 单击、`2` 双击、`3` 三击、`4` 长按、`5` 甩动、`6` Release（长按后松手）；连续点击时为次数（1～9）；SOS时不使用 |
 
 调用示例(一个监听器按 type 分流):
 
@@ -1373,6 +1393,58 @@ console.log(`久坐提醒: ${bean.isOpen ? '开' : '关'} 每 ${bean.remindDurat
 
 `RwBleSdk.getDrinkRemind(): Promise<DrinkReminderBean>`
 
+
+
+##### 3.2.1.31 自定义震动控制
+
+> 功能配置表属性：`isSupportVibrationControl`。控制设备按固定次数、持续或节奏循环震动，通过强度 0 停止。
+
+`RwBleSdk.controlVibration(mode: number, strength: number, groupCount: number, frequency: number, pause: number): Promise<void>`
+
+| 参数 | 说明 |
+| ---- | ---- |
+| mode | 震动次数 1～15；`255` 表示持续震动或节奏循环 |
+| strength | 强度 0..3；0 表示停止/忽略循环参数 |
+| groupCount | 每组震动次数 1～15，仅节奏循环时有效 |
+| frequency | 组内频率 1～10次/秒，仅节奏循环时有效 |
+| pause | 组间停顿 1～255，单位100ms，仅节奏循环时有效 |
+
+不使用节奏循环时，`groupCount`、`frequency`、`pause` 均传 `0`。参数非法时 Promise 抛错。
+
+##### 3.2.1.32 自定义数字显示
+
+> 功能配置表属性：`isSupportCustomNumberDisplay`。将指定数字显示到设备，显示3秒后退出。
+
+`RwBleSdk.showCustomNumber(number: number): Promise<void>`
+
+number 为需要显示的数字，范围 0～9999。
+
+##### 3.2.1.33 计数识别开关与状态查询
+
+> 开启或关闭计数识别，切换不清零累计计数。功能配置表属性：`isSupportCountControl`。
+
+`RwBleSdk.setCountControl(armed: boolean): Promise<void>`
+
+`RwBleSdk.getCountControl(): Promise<boolean>`
+
+| 参数/返回 | 说明 |
+| --------- | ---- |
+| armed | `true`：开启(Arm)；`false`：关闭(Disarm) |
+| getCountControl 返回 | 当前开关状态：`true` = Arm，`false` = Disarm |
+
+等待上一次操作完成后再进行下一次设置或查询。状态变化通过 `subscribePush` 的 `COUNT_CONTROL` 推送（`value` 为 boolean）；实时计数经 `MUSLIM_COUNT` 上报。
+
+##### 3.2.1.34 客户型号设置与获取
+
+> 功能配置表属性：`isSupportCustomerModel`。客户型号默认与原设备型号一致，可用于业务区分，不改变原设备型号 `deviceClazz`；OTA 固件匹配仍使用 `deviceClazz`。获取设备版本信息时，也可通过 `FirmVersionBean.customerModel` 读取客户型号。
+
+`RwBleSdk.setCustomerModel(model: string): Promise<void>`
+
+`RwBleSdk.getCustomerModel(): Promise<string>`
+
+| 参数 | 说明 |
+| ---- | ---- |
+| model | 客户型号，最多8个字符，仅支持英文字母和数字 |
 
 
 #### 3.2.2 健康数据同步(实时单次与全天检测)
@@ -1955,6 +2027,16 @@ PPG/ACC/PPG Red/IR历史采集的 `sensorType` 合法组合:
 >
 > **注意:** 控制接口的 `sensorType` 是传感器按位组合值, 返回对象的 `type` 是数据类型, 两者编号定义不同. 例如 `sensorType=1` 表示开启ACC, 而历史数据 `type=1` 表示PPG; `sensorType=5` 表示红光+ACC, 而睡眠实时数据 `type=5` 表示睡眠状态.
 
+##### 3.2.5.4 PPG采样率设置与获取
+
+> 功能配置表属性：`isSupportPpgSampleRate`。设置或查询PPG采样率，单位Hz，例如100Hz、200Hz，具体可用值需设备固件支持。
+
+`RwBleSdk.setPpgSampleRate(sampleRate: number): Promise<void>`
+
+`RwBleSdk.getPpgSampleRate(): Promise<number>`
+
+查询返回设备当前采样率，单位Hz。另见 [3.2.5.0 PPG定时监测](#3250-ppg定时监测)。
+
 ##### 3.2.5.0 PPG定时监测
 
 > 配置表属性: `isSupportPPGMonitoring`; 统一走 [3.2.2.2 全天检测](#3222-全天检测-设置健康数据全天监听) 的 `setHealthMonitor(HealthMonitorType.PPG, bean)` / `getHealthMonitor(HealthMonitorType.PPG)`.
@@ -2090,6 +2172,8 @@ if (files.length > 0) {
 
 `RwBleSdk.recordControl(start: boolean): Promise<void>`
 
+> 实际录音状态通过 `getRecordStatus()` 或录音状态推送获取。
+
 ##### 3.2.6.2 查询录音状态
 
 `RwBleSdk.getRecordStatus(): Promise<RecordStatusBean>`
@@ -2103,6 +2187,7 @@ RecordStatusBean 参数说明:
 | duration          | number  | 录音时长, 单位秒                           |
 | totalCapacity     | number  | 录音区总容量                               |
 | remainingCapacity | number  | 录音区剩余容量                             |
+| realtime          | boolean | 是否为实时录音; 旧固件未提供时为 false      |
 
 > 录音状态变化也会经设备主动推送上报: `subscribePush` 的 `data.type === DevicePushType.RECORD_STATUS`(见 [3.2.1.21](#32121-设备主动推送监听)), `data.value` 为 `RecordStatusBean`。
 
@@ -2143,8 +2228,52 @@ RecordFileTransferBean 参数说明:
 
 `RwBleSdk.formatRecordStorage(): Promise<void>`
 
+##### 3.2.6.7 实时录音
+
+> 功能配置表属性：`isSupportRecording`，需设备固件支持实时录音。原 `recordControl` 保持不变。
+
+`RwBleSdk.recordRealtimeControl(start: boolean): Promise<number>`
+
+| 参数/返回 | 说明 |
+| --------- | ---- |
+| start | `true`：启动实时录音；`false`：停止 |
+| Promise 返回 | 操作后的实际录音状态(1录音中、0空闲, 原样透传)；音频不通过返回值返回 |
+
+音频通过 `subscribePush` 的 `RECORD_REALTIME_DATA` 接收，`value` 为 `RecordRealtimeDataBean`：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| sequence | number | 数据包序号0～255，255后回到0，可用于检查丢包和顺序 |
+| audioData | Uint8Array | 当前包的音频数据（原始 Opus 压缩数据） |
+
+```typescript
+import { DevicePushType, PushData, RecordRealtimeDataBean } from 'rw_ble_sdk'
+
+const unsubscribe = RwBleSdk.subscribePush((data: PushData) => {
+  if (data.type !== DevicePushType.RECORD_REALTIME_DATA) return
+  const packet = data.value as RecordRealtimeDataBean
+  console.info(`audio sequence=${packet.sequence}, size=${packet.audioData.length}`)
+})
+RwBleSdk.recordRealtimeControl(true).then((state) => console.info(`state=${state}`))
+// 停止时调用: RwBleSdk.recordRealtimeControl(false)
+// 不再使用时: unsubscribe()
+```
+
+先注册监听再启动。操作后的实际录制状态经 `getRecordStatus()` 或 `RECORD_STATUS` 推送获取（`realtime` 表示当前是否为实时方式）。
+
 
 ## SDK修订记录
+
+**v2.0.0_20261028** (2026.10.28)
+
+- 新增实时录音控制接口 `recordRealtimeControl` 及实时音频推送监听(3.2.6.7)，录音状态新增 `realtime` 字段；录音控制回包改为操作后实际录音状态
+- 新增计数识别开关、状态查询及主动推送(3.2.1.33)，功能表新增 `isSupportCountControl`
+- 新增PPG采样率设置与获取(3.2.5.4)与客户型号设置与获取(3.2.1.34)，功能表新增 `isSupportPpgSampleRate`/`isSupportCustomerModel`，设备信息新增 `customerModel`
+- 新增自定义震动控制 `controlVibration`(3.2.1.31)与自定义数字显示 `showCustomNumber`(3.2.1.32)，功能表新增 `isSupportVibrationControl`/`isSupportCustomNumberDisplay`
+- 新增赞念计数清零 `setMuslimCountClean`；赞念实时计数一帧多项时逐项上报
+- 扫描结果新增电量状态 `batteryStatus` 与产品形态 `deviceForm`，设备版本信息新增 `deviceForm`；触摸事件支持 SOS 与连续点击
+
+
 
 **v2.0.0_20260922** (2026.09.22)
 

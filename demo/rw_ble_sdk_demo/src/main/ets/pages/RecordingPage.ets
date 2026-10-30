@@ -6,6 +6,7 @@ import {
   OpusBinConverter,
   PushData,
   RecordFileItemBean,
+  RecordRealtimeDataBean,
   RecordStatusBean,
   RwBleSdk
 } from 'rw_ble_sdk';
@@ -20,19 +21,32 @@ struct RecordingPage {
   @State private filesLoading: boolean = false
   @State private transferText: string = ''
   @State private busy: boolean = false
+  @State private realtimePackets: number = 0
+  @State private realtimeBytes: number = 0
+  @State private realtimeSequence: string = '--'
   private unsubscribePush: (() => void) | null = null
+  private active: boolean = false
+  private statusRequest: Promise<RecordStatusBean> | null = null
+  private audioPackets: number = 0
+  private audioBytes: number = 0
+  private audioSequence: number = 0
+  private audioFlushTimer: number = -1
 
   aboutToAppear(): void {
-    this.refreshStatus()
-    this.refreshFiles()
+    this.active = true
     // 录音状态实时推送：录音中每隔一段时间会上报时长变化
     this.unsubscribePush = RwBleSdk.subscribePush((data: PushData) => {
-      if (data.type !== DevicePushType.RECORD_STATUS) return
-      this.applyStatus(data.value as RecordStatusBean, '(推送)')
+      if (!this.active) return
+      if (data.type === DevicePushType.RECORD_STATUS) this.applyStatus(data.value as RecordStatusBean, '(推送)')
+      if (data.type === DevicePushType.RECORD_REALTIME_DATA) this.receiveRealtimeAudio(data.value as RecordRealtimeDataBean)
     })
+    this.refreshStatus()
+    this.refreshFiles()
   }
 
   aboutToDisappear(): void {
+    this.active = false
+    this.clearAudioFlushTimer()
     this.unsubscribePush?.()
     this.unsubscribePush = null
   }
@@ -44,32 +58,94 @@ struct RecordingPage {
   private applyStatus(status: RecordStatusBean, suffix: string = ''): void {
     this.status = status
     this.statusText = status.recording
-      ? `录音中 · 已录 ${status.duration} 秒${suffix}`
+      ? `${status.realtime ? '实时录音中' : '录音中'} · 已录 ${status.duration} 秒${suffix}`
       : `未在录音${suffix}`
   }
 
-  private async refreshStatus(): Promise<void> {
+  private async refreshStatus(): Promise<boolean> {
+    const request = this.statusRequest ?? RwBleSdk.getRecordStatus()
+    this.statusRequest = request
     try {
-      const status = await RwBleSdk.getRecordStatus()
+      const status = await request
+      if (!this.active) return false
       this.applyStatus(status)
+      return true
     } catch (e) {
-      this.statusText = `状态读取失败: ${e instanceof Error ? e.message : String(e)}`
+      if (this.active) this.statusText = `状态读取失败: ${e instanceof Error ? e.message : String(e)}`
+      return false
+    } finally {
+      if (this.statusRequest === request) this.statusRequest = null
     }
   }
 
   private async toggleRecording(): Promise<void> {
+    await this.controlRecording(false)
+  }
+
+  private async toggleRealtimeRecording(): Promise<void> {
+    await this.controlRecording(true)
+  }
+
+  private async controlRecording(realtime: boolean): Promise<void> {
     if (this.busy) return
+    if (!RwBleSdk.isBleConnected() || this.status === null) {
+      this.showToast('请先连接并获取录音状态')
+      return
+    }
+    if (realtime && this.status.recording && !this.status.realtime) {
+      this.showToast('请先停止普通录音')
+      return
+    }
     const start = this.status?.recording !== true
     this.busy = true
     try {
-      await RwBleSdk.recordControl(start)
-      this.showToast(start ? '录音已开始' : '录音已停止')
-      await this.refreshStatus()
+      if (realtime) {
+        if (start) this.resetRealtimeStats()
+        await RwBleSdk.recordRealtimeControl(start)
+      } else {
+        await RwBleSdk.recordControl(start)
+      }
+      if (!(await this.refreshStatus()) || !this.active) return
+      const matched = start
+        ? this.status?.recording === true && this.status?.realtime === realtime
+        : this.status?.recording === false
+      this.showToast(matched ? (start ? '录音已开始' : '录音已停止') : '设备状态未按预期改变')
+      console.info(`[RWSDK Demo] recording realtime=${realtime}, start=${start}, matched=${matched}`)
     } catch (e) {
-      this.showToast(`操作失败: ${e instanceof Error ? e.message : String(e)}`)
+      if (this.active) this.showToast(`操作失败: ${e instanceof Error ? e.message : String(e)}`)
     } finally {
       this.busy = false
     }
+  }
+
+  /** 只接收统计，不保存实时音频；每500ms刷新，避免逐包刷新UI或打印日志。 */
+  private receiveRealtimeAudio(packet: RecordRealtimeDataBean): void {
+    this.audioPackets++
+    this.audioBytes += packet.audioData.length
+    this.audioSequence = packet.sequence
+    if (this.audioFlushTimer >= 0) return
+    this.audioFlushTimer = setTimeout(() => {
+      this.audioFlushTimer = -1
+      if (!this.active) return
+      this.realtimePackets = this.audioPackets
+      this.realtimeBytes = this.audioBytes
+      this.realtimeSequence = `${this.audioSequence}`
+    }, 500)
+  }
+
+  private clearAudioFlushTimer(): void {
+    if (this.audioFlushTimer >= 0) clearTimeout(this.audioFlushTimer)
+    this.audioFlushTimer = -1
+  }
+
+  private resetRealtimeStats(): void {
+    this.clearAudioFlushTimer()
+    this.audioPackets = 0
+    this.audioBytes = 0
+    this.audioSequence = 0
+    this.realtimePackets = 0
+    this.realtimeBytes = 0
+    this.realtimeSequence = '--'
   }
 
   private async refreshFiles(): Promise<void> {
@@ -182,7 +258,7 @@ struct RecordingPage {
           Column({ space: 8 }) {
             Row({ space: 12 }) {
               Column({ space: 3 }) {
-                Text(this.status?.recording === true ? '● 录音中' : '○ 未在录音')
+                Text(this.status?.recording === true ? (this.status?.realtime === true ? '● 实时录音中' : '● 录音中') : '○ 未在录音')
                   .fontSize(17).fontWeight(FontWeight.Bold)
                   .fontColor(this.status?.recording === true ? '#D9483B' : '#18221E')
                 if (this.status?.recording === true) {
@@ -195,8 +271,17 @@ struct RecordingPage {
               Button(this.status?.recording === true ? '停止' : '开始录音')
                 .fontSize(14).backgroundColor(this.status?.recording === true ? '#D9483B' : '#0C9B6C')
                 .onClick(() => this.toggleRecording())
+                .enabled(!this.busy && this.status !== null)
             }
             .width('100%')
+            Button(this.status?.recording === true && this.status?.realtime === true ? '停止实时录音' : '开始实时录音')
+              .fontSize(14).backgroundColor(this.status?.realtime === true ? '#D9483B' : '#0C9B6C')
+              .onClick(() => this.toggleRealtimeRecording())
+              .enabled(!this.busy && this.status !== null && !(this.status?.recording === true && this.status?.realtime !== true))
+            if (this.status?.realtime === true || this.realtimePackets > 0) {
+              Text(`实时音频 ${this.realtimePackets} 包 / ${this.realtimeBytes} 字节 / 序号 ${this.realtimeSequence}`)
+                .fontSize(12).fontColor('#0C9568').width('100%')
+            }
             Divider().strokeWidth(1).color('#EDF0EE')
             Row({ space: 16 }) {
               Text(`总容量 ${this.status?.totalCapacity ?? '-'}`).fontSize(12).fontColor('#87928D')
