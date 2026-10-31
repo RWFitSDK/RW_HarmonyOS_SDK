@@ -302,7 +302,7 @@ SupportMenuBean 属性定义:
 | isSupportSensorRawIR        | 是否支持获取IR红外原始数据  |
 | isSupportSensorRawSleep     | 是否支持睡眠实时数据       |
 | isSupportFallDetect         | 是否支持跌落提醒           |
-| isSupportRecording          | 是否支持录音功能           |
+| isSupportRecording          | 是否支持AI录音功能         |
 | isSupportDevicePasswordAuth | 是否支持设备密码认证       |
 | isSupportScreenControl      | 是否支持即时屏幕亮灭控制   |
 | isSupportUnitSetting        | 是否支持公制/英制单位设置  |
@@ -1060,7 +1060,7 @@ DevicePushType 说明:
 | 类型           | value 类型       | 说明                                                       |
 | -------------- | ---------------- | ---------------------------------------------------------- |
 | POWER          | PowerBean        | 电量与充电状态推送, 见 [3.2.1.4.1](#32141-实时电量监听)     |
-| RECORD_STATUS  | RecordStatusBean | 录音状态推送, 见 [3.2.6](#326-录音功能)                      |
+| RECORD_STATUS  | RecordStatusBean | 录音状态推送, 见 [3.2.6](#326-ai录音功能)                    |
 | TOUCH_EVENT    | TouchEventBean   | 触摸/跌落/SOS/连续点击事件，见下方字段说明        |
 | MUSLIM_COUNT   | MuslimCountItemBean | 赞念计数实时上报(设备按键计数主动上报), 字段: timestamp(Unix秒)/count; 一帧多项时逐项上报 |
 | RECORD_REALTIME_DATA | RecordRealtimeDataBean | 实时录音音频：sequence（0-255循环序号）和 audioData（原始Opus压缩数据），见 [3.2.6.7](#3267-实时录音) |
@@ -2150,7 +2150,7 @@ unsubscribe()
 
 
 
-#### 3.2.6 录音功能
+#### 3.2.6 AI录音功能
 
 > 功能配置表属性: `isSupportRecording`。仅支持该能力的设备可使用。
 
@@ -2170,9 +2170,9 @@ if (files.length > 0) {
 
 ##### 3.2.6.1 开始/停止录音
 
-`RwBleSdk.recordControl(start: boolean): Promise<void>`
+`RwBleSdk.recordControl(start: boolean): Promise<number>`
 
-> 实际录音状态通过 `getRecordStatus()` 或录音状态推送获取。
+`start`：`true` 开始录音，`false` 停止录音。返回操作后的实际录音状态：`1` 录音中、`0` 空闲。详细状态可通过 `getRecordStatus()` 查询，或监听 `RECORD_STATUS` 推送。
 
 ##### 3.2.6.2 查询录音状态
 
@@ -2187,7 +2187,7 @@ RecordStatusBean 参数说明:
 | duration          | number  | 录音时长, 单位秒                           |
 | totalCapacity     | number  | 录音区总容量                               |
 | remainingCapacity | number  | 录音区剩余容量                             |
-| realtime          | boolean | 是否为实时录音; 旧固件未提供时为 false      |
+| realtime          | boolean | 是否为实时录音                             |
 
 > 录音状态变化也会经设备主动推送上报: `subscribePush` 的 `data.type === DevicePushType.RECORD_STATUS`(见 [3.2.1.21](#32121-设备主动推送监听)), `data.value` 为 `RecordStatusBean`。
 
@@ -2202,7 +2202,7 @@ RecordFileItemBean 参数说明:
 | fileId    | number | 文件 ID, 下载/删除时使用                    |
 | fileSize  | number | 文件大小, 单位字节                          |
 | duration  | number | 录音时长, 单位秒                            |
-| timestamp | number | 录音时间, Unix 秒, SDK 已完成转换           |
+| timestamp | number | 录音时间, Unix 秒时间戳                     |
 
 ##### 3.2.6.4 下载录音文件
 
@@ -2217,8 +2217,8 @@ RecordFileTransferBean 参数说明:
 | fileId   | number | 来自文件列表的文件 ID                  |
 | progress | number | 0~1                                    |
 | received | number | 已接收字节                             |
-| complete | boolean | 是否完成帧                             |
-| fileData | Uint8Array（完成帧） | 完整录音文件数据         |
+| complete | boolean | 是否下载完成                           |
+| fileData | Uint8Array | 完整录音文件数据，下载完成后返回       |
 
 ##### 3.2.6.5 删除录音文件
 
@@ -2230,14 +2230,14 @@ RecordFileTransferBean 参数说明:
 
 ##### 3.2.6.7 实时录音
 
-> 功能配置表属性：`isSupportRecording`，需设备固件支持实时录音。原 `recordControl` 保持不变。
+> 功能配置表属性：`isSupportRecording`，需设备固件支持实时录音。普通录音使用 `recordControl`。
 
 `RwBleSdk.recordRealtimeControl(start: boolean): Promise<number>`
 
 | 参数/返回 | 说明 |
 | --------- | ---- |
 | start | `true`：启动实时录音；`false`：停止 |
-| Promise 返回 | 操作后的实际录音状态(1录音中、0空闲, 原样透传)；音频不通过返回值返回 |
+| Promise 返回 | 操作后的实际录音状态：`1` 录音中、`0` 空闲 |
 
 音频通过 `subscribePush` 的 `RECORD_REALTIME_DATA` 接收，`value` 为 `RecordRealtimeDataBean`：
 
